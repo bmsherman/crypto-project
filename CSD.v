@@ -644,6 +644,20 @@ Proof.
 intros. unfold Bmap, map. simpl. reflexivity.
 Qed.
 
+Definition truncate {n} k (x : Bvector (k + n)) : Bvector n.
+Proof. induction k. apply x.
+apply (IHk (Vector.shiftout x)).
+Defined.
+
+Definition truncate_fam (p : nat -> nat)
+  (p_stretches : forall n, n < p n) : forall n, Bvector (p n) -> Bvector (S n).
+Proof.
+intros n x. rewrite (Minus.le_plus_minus (S n) (p n)) in x.
+rewrite Plus.plus_comm in x.
+exact (truncate _ x).
+apply p_stretches.
+Defined.
+
 Record PRG {l : nat -> nat} {G : BComp l} :=
   { length_stretches : forall n, n < l n
   ; looks_random : Bmap G (@uniform id) ~~ uniform
@@ -736,6 +750,61 @@ constructor.
 - unfold Bcompose. simpl.
   apply PPT_compose.  apply (is_PPT G_is_PRG).
   apply G_len_PPT.
+Qed.
+
+Definition Bdeterministic' {p l} (f : forall n, Bvector (p n) -> Bvector (l n))
+  : forall n : nat, Bvector (p n) -> Comp (Bvector (l n)) :=
+  fun n x => Ret (@Bvector_eq_dec _) (f n x).
+
+Definition truncate_lenG := 
+  (Bdeterministic' (truncate_fam len (length_stretches G_is_PRG))).
+
+Lemma truncate_lenG_PPT : PPT truncate_lenG.
+Proof.
+Admitted.
+
+Definition truncatedG : BComp S :=
+   compose G truncate_lenG.
+
+Lemma lift_id : forall {A B : nat -> Set} (f : forall n, A n -> Comp (B n)), lift id f = f.
+Proof.
+intros. reflexivity.
+Qed.
+
+Lemma partBlemma1 : (map truncate_lenG uniform == uniform)%Fam.
+Proof.
+unfold eq_PrFam. intros n. simpl. 
+unfold truncate_lenG, Bdeterministic', map.
+unfold uniform.
+Admitted.
+
+Lemma partBlemma : PRG truncatedG.
+Proof.
+constructor.
+- intros. unfold lt. reflexivity.
+- unfold truncatedG. rewrite Bmap_map. rewrite lift_id.
+  eapply CI_Proper. symmetry. apply map_compose. reflexivity.
+  eapply CI_Proper. reflexivity. symmetry. apply partBlemma1.
+  apply CI_cong. apply truncate_lenG_PPT.
+  apply G_is_PRG.
+- unfold truncatedG. apply PPT_compose. apply G_is_PRG.
+  apply truncate_lenG_PPT.
+Qed.
+
+Definition shiftout_fam : forall n, Bvector n -> Bvector (pred n).
+Proof.
+destruct n. 
+- exact (fun x => x).
+- exact Vector.shiftout.
+Defined.
+
+Theorem partB : exists len' (G' : BComp len'),
+ PRG G' /\ ~ (PRG (Bcompose G' (Bdeterministic shiftout_fam))).
+Proof.
+exists S. exists truncatedG. split. apply partBlemma.
+unfold not. intros. pose proof (length_stretches H) as contra.
+simpl in contra. specialize (contra 0%nat).
+unfold lt in contra. apply Le.le_Sn_0 in contra. assumption.
 Qed.
 
 Variable perm : forall n, Bvector n -> Bvector n.
