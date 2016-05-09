@@ -244,7 +244,7 @@ Definition Distinguisher (A : nat -> Set) := forall n, A n -> Comp ((fun _ => bo
 Definition map {A B : nat -> Set} (f : forall n, A n -> Comp (B n)) (mu : PrFamily A) : PrFamily B
   := fun n => Bind (mu n) (f n).
 
-Definition eq_PrFam {A} (x y : PrFamily A) : Prop :=
+Definition eq_PrFam A (x y : PrFamily A) : Prop :=
   forall n, dist_sem_eq (x n) (y n).
 
 Instance eq_PrFam_Equivalence : forall A, Equivalence (@eq_PrFam A).
@@ -255,12 +255,13 @@ reflexivity. symmetry. apply H.
 transitivity (y n). apply H. apply H0. 
 Qed.
 
-Infix "==" := eq_PrFam : Fam_scope. 
+Notation "x ={ A }= y" := (eq_PrFam A x y) (at level 70) : Fam_scope.
+Infix "==" := (eq_PrFam _) : Fam_scope. 
 Delimit Scope Fam_scope with Fam.
 
 Theorem map_compose : forall {A B C : nat -> Set} (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n))
   (mu : PrFamily A),
-  (map g (map f mu) == map (compose f g) mu)%Fam.
+  (map g (map f mu) ={ C }= map (compose f g) mu)%Fam.
 Proof.
 intros. unfold eq_PrFam. intros.
 unfold map. simpl. apply evalDist_assoc_eq.
@@ -270,11 +271,12 @@ Definition CSD_fam {A : nat -> Set} (mu1 mu2 : PrFamily A)
   (test : Distinguisher A) (n : nat) : Rat :=
   CSD (mu1 n) (mu2 n) (test n).
 
-Definition CI {A : nat -> Set} (mu1 mu2 : PrFamily A) : Prop :=
+Definition CI (A : nat -> Set) (mu1 mu2 : PrFamily A) : Prop :=
   forall test : Distinguisher A, PPT test ->
     negligible (CSD_fam mu1 mu2 test).
 
-Infix "~~" := CI (at level 70).
+Infix "~~" := (CI _) (at level 70).
+Notation "x ~{ A }~ y" := (CI A x y) (at level 70).
 
 Fixpoint bounded_lookup (p : nat -> bool) (bound : nat) : option { n | p n = true }.
 Proof. 
@@ -414,7 +416,7 @@ apply CI_Transitive.
 Qed.
 
 Lemma CI_cong {A B} : forall (a b : PrFamily A) (f : forall n, A n -> Comp (B n)),
-  PPT f -> a ~~ b -> map f a ~~ map f b.
+  PPT f -> a ~{ A }~ b -> map f a ~{ B }~ map f b.
 Proof.
 unfold CI. intros.
 assert (forall n, CSD_fam (map f a) (map f b) test n == CSD_fam a b (compose f test) n).
@@ -508,7 +510,7 @@ unfold Proper, respectful. intros. subst.
 unfold CSD. rewrite H, H0. reflexivity.
 Qed.
 
-Instance CSD_fam_Proper : forall A, Proper (eq_PrFam ==> eq_PrFam ==> eq ==> pointwise_relation _ eqRat) (@CSD_fam A).
+Instance CSD_fam_Proper : forall A, Proper (eq_PrFam A ==> eq_PrFam A ==> eq ==> pointwise_relation _ eqRat) (@CSD_fam A).
 Proof.
 intros. unfold Proper, respectful, pointwise_relation.
 intros. unfold CSD_fam. subst. unfold eq_PrFam in *.
@@ -522,7 +524,7 @@ intros. split; intros; eapply negligible_eq; eauto.
 intros. symmetry. apply H.
 Qed.
 
-Instance CI_Proper : forall A, Proper (eq_PrFam ==> eq_PrFam ==> iff) (@CI A).
+Instance CI_Proper : forall A, Proper (eq_PrFam A ==> eq_PrFam A ==> iff) (@CI A).
 Proof.
 unfold Proper, respectful, CI. intros. split; intros.
 - rewrite <- H, <- H0. apply H1; assumption.
@@ -587,9 +589,9 @@ Qed.
 
 Definition BPrFamily (length : nat -> nat) := forall n, Comp (Bvector (length n)).
 
-Definition uniform {l} : BPrFamily l := fun n => Rnd (l n).
+Definition uniform l : BPrFamily l := fun n => Rnd (l n).
 
-Lemma uniform_lift_id {l} : @uniform l = lift_dist l (@uniform id).
+Lemma uniform_lift_id {l} : uniform l = lift_dist l (uniform id).
 Proof. 
 reflexivity.
 Qed.
@@ -629,7 +631,7 @@ Definition map_det {l lf} (f : forall n, Bvector n -> Bvector (lf n))
 Definition Bpermutation (f : forall n, Bvector n -> Bvector n) 
   (permf : forall n, permutation (f n))
   (l : nat -> nat)
-  : (Bmap (Bdeterministic f) (@uniform l) == uniform)%Fam.
+  : (Bmap (Bdeterministic f) (uniform l) == uniform l)%Fam.
 Proof.
 unfold eq_PrFam. intros n.
 unfold Bmap, Bdeterministic, uniform.
@@ -660,7 +662,7 @@ Defined.
 
 Record PRG {l : nat -> nat} {G : BComp l} :=
   { length_stretches : forall n, n < l n
-  ; looks_random : Bmap G (@uniform id) ~~ uniform
+  ; looks_random : Bmap G (uniform id) ~~ uniform l
   ; is_PPT : PPT G
   }.
 
@@ -674,18 +676,18 @@ Qed.
 
 Lemma looks_random_lift {l G} : @PRG l G
   -> forall (p : nat -> nat) (pmono : forall n, (n <= p n)%nat)
-  , Bmap G (@uniform p) ~~ uniform.
+  , Bmap G (uniform p) ~~ uniform (l @ p).
 Proof.
-intros. rewrite (Bmap_map G uniform).
+intros. rewrite (Bmap_map G).
 rewrite (@uniform_lift_id p).
-rewrite (@uniform_lift_id (fun n => l (p n))).
+rewrite (@uniform_lift_id (l @ p)).
 rewrite (map_lift G p). 
 pose (mu := lift_dist p (lift_dist l (@uniform id))).
 unfold comp, id in mu.
 transitivity mu. unfold mu.
 pose proof (@lift_CI (fun x => Bvector (l x)) p
-  (map (toProg G) uniform)
-  (lift_dist l (@uniform id))).
+  (map (toProg G) (uniform _))
+  (lift_dist l (uniform id))).
 apply H0. assumption. clear H0. rewrite <- uniform_lift_id.
 apply (looks_random H). unfold mu. reflexivity.
 Qed.
@@ -735,12 +737,19 @@ eapply PPT_bounds_len. apply (is_PPT G_is_PRG).
 apply (is_PPT G_is_PRG).
 Qed.
 
+Instance CI_eq_subrelation A : subrelation (@eq_PrFam A) (@CI A).
+Proof.
+unfold subrelation, predicate_implication, pointwise_lifting.
+unfold Basics.impl.
+intros. eapply CI_Proper. apply H. reflexivity. reflexivity.
+Qed.
+
 Theorem partA : PRG (Bcompose G G).
 Proof.
 constructor.
 - intros. pose proof (length_stretches G_is_PRG).
   eapply Lt.lt_trans. apply H. apply H.
-- rewrite Bmap_Bcompose. 
+- unfold id. rewrite Bmap_Bcompose.
   transitivity (Bmap G (@uniform len)).
   rewrite !Bmap_map. apply CI_cong. simpl. 
   apply G_len_PPT.
@@ -748,7 +757,7 @@ constructor.
   apply looks_random_lift. assumption. unfold id.
   intros. apply Lt.lt_le_weak. apply (length_stretches G_is_PRG).
 - unfold Bcompose. simpl.
-  apply PPT_compose.  apply (is_PPT G_is_PRG).
+  apply PPT_compose.  apply G_is_PRG.
   apply G_len_PPT.
 Qed.
 
@@ -771,7 +780,7 @@ Proof.
 intros. reflexivity.
 Qed.
 
-Lemma partBlemma1 : (map truncate_lenG uniform == uniform)%Fam.
+Lemma partBlemma1 : (map truncate_lenG (uniform len) == uniform S)%Fam.
 Proof.
 unfold eq_PrFam. intros n. simpl. 
 unfold truncate_lenG, Bdeterministic', map.
@@ -783,8 +792,9 @@ Proof.
 constructor.
 - intros. unfold lt. reflexivity.
 - unfold truncatedG. rewrite Bmap_map. rewrite lift_id.
+  unfold id.
   eapply CI_Proper. symmetry. apply map_compose. reflexivity.
-  eapply CI_Proper. reflexivity. symmetry. apply partBlemma1.
+  rewrite <- partBlemma1.
   apply CI_cong. apply truncate_lenG_PPT.
   apply G_is_PRG.
 - unfold truncatedG. apply PPT_compose. apply G_is_PRG.
@@ -818,28 +828,33 @@ Theorem partC : PRG (Bcompose G h).
 Proof.
 constructor.
 - intros. unfold id. apply (length_stretches G_is_PRG).
-- rewrite Bmap_Bcompose. 
+- unfold id; simpl. change (fun x : nat => x) with (@id nat). 
+  change (fun n => len n) with len. 
+  pose proof (Bmap_Bcompose _ _ _ G h (uniform id)). 
+  unfold id in H; simpl in H.
+  rewrite H. clear H.
   transitivity (Bmap h (@uniform len)).
   apply CI_cong. apply lift_PPT. eapply PPT_bounds_len.
-  eapply (is_PPT G_is_PRG). apply h_efficient.
-  apply (looks_random G_is_PRG).
+  eapply G_is_PRG. apply h_efficient.
+  apply G_is_PRG.
   unfold h.
-  eapply CI_Proper. apply Bpermutation. apply perm_is_permutation.
-  reflexivity. reflexivity.
-- apply PPT_compose. apply (is_PPT G_is_PRG). 
-  apply lift_PPT. eapply PPT_bounds_len. apply (is_PPT G_is_PRG). 
+  pose proof (Bpermutation perm perm_is_permutation len).
+  unfold id in H; simpl in H. rewrite H.
+  reflexivity.
+- apply PPT_compose. apply G_is_PRG. 
+  apply lift_PPT. eapply PPT_bounds_len. apply G_is_PRG. 
   assumption.
 Qed.
 
 Theorem partD : PRG (Bcompose h G).
 Proof.
 constructor.
-- intros. unfold id. apply (length_stretches G_is_PRG).
-- rewrite Bmap_Bcompose.
+- intros. unfold id. apply G_is_PRG.
+- unfold id; simpl. rewrite Bmap_Bcompose.
   transitivity (Bmap G (@uniform id)).
-  apply CI_cong. apply (is_PPT G_is_PRG).
-  unfold h. rewrite Bpermutation. reflexivity.
-  apply perm_is_permutation. apply (looks_random G_is_PRG).
+  apply CI_cong. apply G_is_PRG.
+  unfold h. unfold id; simpl. rewrite Bpermutation. reflexivity.
+  apply perm_is_permutation. apply G_is_PRG.
 - apply PPT_compose. apply h_efficient.
-  apply (is_PPT G_is_PRG).
+  apply G_is_PRG.
 Qed.
