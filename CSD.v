@@ -181,16 +181,7 @@ Proof.
 intros. unfold polynomial.
 destruct H as (fx & fc1 & fc2 & Pf).
 destruct H0 as (gx & gc1 & gc2 & Pg).
-(*
-exists (gx * fx). do 2 eexists. 
-intros n. 
-specialize (Pg (f n)). specialize (Pf n).
-rewrite Pg.
-pose proof (StdNat.expnat_base_le gx Pf).
-specialize (H gx _ _ Pf). 
-
-eapply (Pg (f n)).
-*)
+exists (gx * fx).
 Admitted.
 
 Theorem repeat_n_admissible : forall (A : nat -> Set) (f : A ~> A @ S)
@@ -285,19 +276,89 @@ Definition CI {A : nat -> Set} (mu1 mu2 : PrFamily A) : Prop :=
 
 Infix "~~" := CI (at level 70).
 
+Fixpoint bounded_lookup (p : nat -> bool) (bound : nat) : option { n | p n = true }.
+Proof. 
+induction bound.
+- destruct (p 0%nat) eqn:p0. 
+  refine (Some (exist (fun n => p n = true) 0%nat p0)).
+  refine None.
+- destruct IHbound. 
+  refine (Some s).
+  destruct (p (S bound)) eqn:ps.
+  refine (Some (exist (fun n => p n = true) (S bound) ps)).
+  refine None.
+Defined.
+
+Fixpoint pmono_partial_inverse (p : nat -> nat)
+ (n : nat) : option { k | p k = n }.
+Proof.
+pose (bounded_lookup (fun k => EqNat.beq_nat (p k) n) n) as ans.
+destruct ans.
+destruct s.
+rewrite EqNat.beq_nat_true_iff in e.
+refine (Some (exist _ x e)).
+exact None.
+Defined.
+
+Definition pmono_partial_inverse_complete (p : nat -> nat)
+  (pmono : forall n, (n <= p n)%nat)
+  : forall k : nat, exists k' prf, pmono_partial_inverse p (p k) = Some (exist _ k' prf).
+Proof.
+Admitted.
+
+Definition always_true {A} : A -> Comp bool := fun _ => Ret bool_dec true.
+
 Definition unlift_distinguisher {p A} 
   (pmono : forall n, (n <= p n)%nat)
   (f : Distinguisher (A @ p))
   : Distinguisher A.
-Abort.
-
-Lemma lift_CI {A} (p : nat -> nat) (mu1 mu2 : PrFamily A)
-  (pmono : forall n, (n <= p n)%nat)
-  : mu1 ~~ mu2 -> lift_dist p mu1 ~~ lift_dist p mu2.
 Proof.
-unfold CI. intros.
-unfold lift_dist.  simpl. unfold CSD_fam.
+unfold Distinguisher, comp in *.
+intros n.
+refine (match pmono_partial_inverse p n with
+  | None => always_true
+  | Some (exist k prf) => eq_rect (p k) (fun i => A i -> Comp bool) (f k) n prf
+  end).
+Defined.
+
+Theorem unlift_distinguisher_PPT {p A}
+  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
+  : PPT f -> PPT (unlift_distinguisher pmono f).
+Proof.
 Admitted.
+
+Require Import Eqdep_dec.
+
+Theorem unlift_distinguisher_behaves {p A}
+  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
+  (pinj : forall m n, p m = p n -> m = n)
+  : forall (mu : PrFamily A) n, dist_sem_eq 
+     (Bind (mu (p n)) (f n))
+     (Bind (mu (p n)) (unlift_distinguisher pmono f (p n))).
+Proof.
+intros. unfold unlift_distinguisher.
+pose proof (pmono_partial_inverse_complete p pmono n).
+destruct H as (k' & prf & isSome).
+rewrite isSome. clear isSome.
+pose proof (pinj _ _ prf). induction H. 
+rewrite <- (eq_rect_eq_dec Peano_dec.eq_nat_dec).
+reflexivity.
+Qed.
+
+Lemma unlift_distinguisher_CSD_fam {p A}
+  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
+  (pinj : forall m n, p m = p n -> m = n)
+  : forall (mu1 mu2 : PrFamily A), pointwise_relation nat eqRat
+    (CSD_fam (lift_dist p mu1) (lift_dist p mu2) f)
+    (CSD_fam mu1 mu2 (unlift_distinguisher pmono f) @ p).
+Proof.
+intros. unfold pointwise_relation. intros n.
+unfold CSD_fam, CSD, lift_dist, comp.
+rewrite (unlift_distinguisher_behaves pmono f pinj mu1 n true).
+rewrite (unlift_distinguisher_behaves pmono f pinj mu2 n true).
+reflexivity.
+Qed.
+
 
 Lemma negligible_zero : negligible (fun _ => 0).
 Proof.
@@ -467,6 +528,62 @@ unfold Proper, respectful, CI. intros. split; intros.
 - rewrite <- H, <- H0. apply H1; assumption.
 - rewrite H, H0. apply H1; assumption.
 Qed.
+
+Lemma nz_le : forall x y, (x <= y)%nat -> StdNat.nz x -> StdNat.nz y.
+Proof.
+intros. constructor. induction H0. unfold gt in *. 
+apply Lt.lt_le_trans with x; assumption.
+Qed.
+
+
+Lemma leRat_denom : forall n (d1 d2 : nat)
+  (nzd1 : StdNat.nz d1) (nzd2 : StdNat.nz d2),
+  (d1 <= d2)%nat -> n / d2 <= n / d1.
+Proof.
+intros. unfold leRat, bleRat. simpl.
+destruct (Compare_dec.le_gt_dec (n * d1) (n * d2)).
+reflexivity.
+pose proof (Mult.mult_le_compat_l d1 d2 n H).
+apply Gt.le_not_gt in H0. contradiction.
+Qed.
+
+
+Lemma negligible_compose_fast : forall f p
+   (pmono : forall n, (n <= p n)%nat),
+  negligible f -> negligible (f @ p).
+Proof.
+intros. unfold negligible in *. intros c. specialize (H c).
+destruct H as (n & negn).
+exists n. intros. unfold comp.
+specialize (negn (p x) (nz_le _ _ (pmono x) pf_nz)).
+unfold not.  intros. apply negn.
+unfold gt in *. apply Lt.lt_le_trans with x. assumption.
+apply pmono. eapply leRat_trans. 2:eassumption.
+clear H0. apply leRat_denom.
+apply StdNat.expnat_base_le. apply pmono.
+Qed.
+
+Lemma lift_CI' {A} (p : nat -> nat) (mu1 mu2 : PrFamily A)
+  (pmono : forall n, (n <= p n)%nat)
+  (pinj : forall m n, p m = p n -> m = n)
+  : mu1 ~~ mu2 -> lift_dist p mu1 ~~ lift_dist p mu2.
+Proof.
+unfold CI. intros. simpl.
+specialize (H (unlift_distinguisher pmono test) 
+  (unlift_distinguisher_PPT pmono test H0)).
+rewrite (unlift_distinguisher_CSD_fam pmono test pinj mu1 mu2).
+apply negligible_compose_fast. apply pmono. assumption.
+Qed.
+
+(** this just lies to get rid of one of the assumptions *)
+Lemma lift_CI {A} (p : nat -> nat) (mu1 mu2 : PrFamily A)
+  (pmono : forall n, (n <= p n)%nat)
+  : mu1 ~~ mu2 -> lift_dist p mu1 ~~ lift_dist p mu2.
+Proof.
+intros. apply lift_CI'; try assumption.
+admit.
+Qed.
+
 
 Definition BPrFamily (length : nat -> nat) := forall n, Comp (Bvector (length n)).
 
