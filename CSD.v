@@ -988,7 +988,7 @@ Variable p : nat -> nat.
 Hypothesis p_stretches : forall n, n < p n.
 Hypothesis p_poly : polynomial p.
 
-Definition extG := repeat_n_prg p (Bdeterministic G) p_stretches.
+Definition extG := repeat_n_det p G p_stretches.
 
 Require Import Classical_Prop.
 
@@ -1000,12 +1000,12 @@ Proof.
 constructor.
 - apply p_stretches.
 - unfold id. simpl. unfold CI.
-  pose proof (classical _ (fun test => PPT test -> negligible (CSD_fam (Bmap extG (uniform (fun x => x))) (uniform p) test))). simpl in H.
+  pose proof (classical _ (fun test => PPT test -> negligible (CSD_fam (Bmap (Bdeterministic extG) (uniform (fun x => x))) (uniform p) test))). simpl in H.
   destruct H. apply H.
   destruct H as (dist & breaks_security).
   apply imply_to_and in breaks_security.
   destruct breaks_security as (distPPT & nonnegl).
-  assert (exists test', ~ negligible (CSD_fam (Bmap G (uniform id)) (uniform S) test') /\ PPT test').
+  assert (exists test', ~ negligible (CSD_fam (Bmap (Bdeterministic G) (uniform id)) (uniform S) test') /\ PPT test').
   admit.
   destruct H as (test' & nonnegltest' & PPTtest').
   apply False_rect. apply nonnegltest'.
