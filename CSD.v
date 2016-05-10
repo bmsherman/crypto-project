@@ -6,6 +6,14 @@ Require Import Bvector.
 
 Section CSD.
 
+Definition trivial_fcm : FunctionCostModel :=
+  fun A B f x => True.
+
+Theorem trivial_fcm_ok : function_cost_model trivial_fcm.
+Proof.
+unfold trivial_fcm; constructor; intros; auto.
+Qed.
+
 Variable fcm : FunctionCostModel.
 Hypothesis fcm_facts : function_cost_model fcm.
 
@@ -175,6 +183,21 @@ pose ((repeat_k_prg (p n - S n) f) n) as f'.
 rewrite Plus.plus_comm. apply f'.
 Defined.
 
+Fixpoint repeat_k_det {A : nat -> Set} (k : nat) (f : forall n, A n -> A (S n))
+  : forall n, A n -> A (k + S n) := match k as k' return forall n, A n -> A (k' + S n) with
+  | 0 => f
+  | S k' => fun n x => f _ (repeat_k_det k' f n x)
+  end.
+
+Definition repeat_n_det {A : nat -> Set} (p : nat -> nat) (f : forall n, A n -> A (S n))
+  (pmono : forall n, n < p n) : forall n, A n -> A (p n).
+Proof.
+intros n. unfold comp.
+rewrite (Minus.le_plus_minus _ _ (pmono n)).
+pose ((repeat_k_det (p n - S n) f) n) as f'.
+rewrite Plus.plus_comm. apply f'.
+Defined.
+
 Theorem polynomial_compose : forall f g, polynomial f -> polynomial g
   -> polynomial (fun n => g (f n)).
 Proof.
@@ -184,9 +207,17 @@ destruct H0 as (gx & gc1 & gc2 & Pg).
 exists (gx * fx).
 Admitted.
 
-Theorem repeat_n_admissible : forall (A : nat -> Set) (f : A ~> A @ S)
+Definition Bmapd {A n} (f : A -> Bvector n) := fun x => Ret (@Bvector_eq_dec _) (f x).
+
+Definition BComp (length : nat -> nat) := forall n, Bvector n -> Comp (Bvector (length n)).
+
+
+Definition Bdeterministic {l} (f : forall n, Bvector n -> Bvector (l n))
+  : BComp l := fun n => Bmapd (f n).
+
+Theorem repeat_n_admissible : forall (f : forall n, Bvector n -> Bvector (S n))
   (p : nat -> nat) (pmono : forall n, n < p n), polynomial p ->
-  PPT f -> PPT (repeat_n_prg p f pmono).
+  PPT (Bdeterministic f) -> PPT (Bdeterministic (repeat_n_det p f pmono)).
 Proof.
 intros. induction H0.
 apply IsPPT with (fun n => p n * cost (p n)).
@@ -194,7 +225,6 @@ admit.
 apply polynomial_mult; try assumption.
 apply polynomial_compose; assumption.
 Admitted.
-
 
 Lemma PPT_compose : forall {A B C} (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n)),
   PPT f -> PPT g -> PPT (compose f g).
@@ -205,10 +235,12 @@ apply compose_cost; eassumption.
 apply polynomial_plus; assumption.
 Qed.
 
-Require Import DistSem.
-Require Import Rat.
+Require Import DistSem Rat.
 
 Local Open Scope rat.
+
+Infix "==" := dist_sem_eq : Dist_scope.
+Delimit Scope Dist_scope with Dist.
 
 Definition CSD {A} (mu1 mu2 : Comp A) (test : A -> Comp bool)
   := | Pr [ Bind mu1 test ] - Pr [ Bind mu2 test ] |.
@@ -245,7 +277,7 @@ Definition map {A B : nat -> Set} (f : forall n, A n -> Comp (B n)) (mu : PrFami
   := fun n => Bind (mu n) (f n).
 
 Definition eq_PrFam A (x y : PrFamily A) : Prop :=
-  forall n, dist_sem_eq (x n) (y n).
+  forall n, (x n == y n)%Dist.
 
 Instance eq_PrFam_Equivalence : forall A, Equivalence (@eq_PrFam A).
 Proof.
@@ -596,8 +628,6 @@ Proof.
 reflexivity.
 Qed.
 
-Definition BComp (length : nat -> nat) := forall n, Bvector n -> Comp (Bvector (length n)).
-
 Definition Bcompose {l1 l2} (f : BComp l1) (g : BComp l2)
   : BComp (fun n => l2 (l1 n))
   := fun n x => Bind (f n x) (g (l1 n)).
@@ -620,14 +650,6 @@ unfold Bmap, Bcompose, eq_PrFam.
 intros. symmetry. apply evalDist_assoc_eq.
 Qed.
 
-Definition Bdeterministic {l} (f : forall n, Bvector n -> Bvector (l n))
-  : BComp l := fun n x => Ret (@Bvector_eq_dec (l n)) (f n x).
-
-Definition map_det {l lf} (f : forall n, Bvector n -> Bvector (lf n))
-  (mu : BPrFamily l) : BPrFamily (fun n => lf (l n))
-  := fun n => map_prob (@Bvector_eq_dec (lf (l n))) (f (l n)) (mu n).
-
-
 Definition Bpermutation (f : forall n, Bvector n -> Bvector n) 
   (permf : forall n, permutation (f n))
   (l : nat -> nat)
@@ -646,24 +668,68 @@ Proof.
 intros. unfold Bmap, map. simpl. reflexivity.
 Qed.
 
-Definition truncate {n} k (x : Bvector (k + n)) : Bvector n.
-Proof. induction k. apply x.
-apply (IHk (Vector.shiftout x)).
-Defined.
-
-Definition truncate_fam (p : nat -> nat)
-  (p_stretches : forall n, n < p n) : forall n, Bvector (p n) -> Bvector (S n).
+Lemma tl_uniform : forall n, (Bind (Rnd (S n)) (Bmapd Vector.tl) == Rnd n)%Dist.
 Proof.
-intros n x. rewrite (Minus.le_plus_minus (S n) (p n)) in x.
-rewrite Plus.plus_comm in x.
-exact (truncate _ x).
-apply p_stretches.
-Defined.
+intros n. unfold dist_sem_eq. intros v.
+simpl. rewrite Fold.sumList_app. rewrite !Fold.sumList_map.
+rewrite !(@Fold.sumList_exactly_one _ v). simpl.
+rewrite ratMult_2, eq_dec_refl. rewrite !ratMult_1_r. 
+rewrite <- rat_mult_den.
+unfold eqRat, beqRat. simpl. 
+match goal with 
+| [ |- (if ?e then _ else _) = _ ] => destruct e
+end. reflexivity. apply False_rect. apply n0. clear n0.
+omega.
+apply getAllBvectors_NoDup. apply in_getAllBvectors.
+simpl. intros.  destruct (Bvector_eq_dec b v). congruence.
+apply ratMult_0_r.
+apply getAllBvectors_NoDup. apply in_getAllBvectors.
+simpl. intros. destruct (Bvector_eq_dec b v). congruence.
+apply ratMult_0_r.
+Qed.
 
-Record PRG {l : nat -> nat} {G : BComp l} :=
+Fixpoint truncate k : forall n, Bvector (k + n) -> Bvector n :=
+  match k as k' return forall n, Bvector (k' + n) -> Bvector n  with
+  | 0 => fun n x => x
+  | S k' => fun n x => truncate k' n (Vector.tl x)
+  end.
+
+Lemma Bmapd_compose : forall (A : Set) n m (f : A -> Bvector n) (g : Bvector n -> Bvector m)
+  mu, 
+  (Bmapd (fun x => g (f x)) mu == Bind (Bmapd f mu) (Bmapd g))%Dist.
+Proof.
+intros. unfold Bmapd. unfold dist_sem_eq.
+intros x. rewrite (evalDist_left_ident_eq (Bvector_EqDec n) (f mu)).
+reflexivity.
+Qed.
+
+Lemma Bmapd_compose2 : forall (A : Set) n m (f : A -> Bvector n) (g : Bvector n -> Bvector m)
+  mu, 
+  (Bind mu (Bmapd (fun x => g (f x))) == Bind (Bind mu (Bmapd f)) (Bmapd g))%Dist.
+Proof.
+intros. unfold Bmapd. rewrite evalDist_assoc_eq.
+unfold dist_sem_eq. intros v.
+apply evalDist_seq_eq. intros; reflexivity.
+intros. rewrite (evalDist_left_ident_eq (Bvector_EqDec n)).
+reflexivity.
+Qed.
+
+Lemma truncate_uniform : forall k n, (Bind (Rnd (k + n)) (Bmapd (truncate k n)) == Rnd n)%Dist.
+Proof.
+intros k. induction k.
+- simpl. unfold truncate. simpl. unfold Bmapd.
+  intros n. unfold dist_sem_eq. 
+  intros x. apply evalDist_right_ident.
+- intros n. simpl. rewrite Bmapd_compose2.
+  rewrite tl_uniform. fold plus. apply IHk.
+Qed.
+
+Definition BDetComp (l : nat -> nat) := forall n, Bvector n -> Bvector (l (n)).
+
+Record PRG {l : nat -> nat} {G : BDetComp l} :=
   { length_stretches : forall n, n < l n
-  ; looks_random : Bmap G (uniform id) ~~ uniform l
-  ; is_PPT : PPT G
+  ; looks_random : Bmap (Bdeterministic G) (uniform id) ~~ uniform l
+  ; is_PPT : PPT (Bdeterministic G)
   }.
 
 Arguments PRG {l} G : clear implicits.
@@ -676,28 +742,22 @@ Qed.
 
 Lemma looks_random_lift {l G} : @PRG l G
   -> forall (p : nat -> nat) (pmono : forall n, (n <= p n)%nat)
-  , Bmap G (uniform p) ~~ uniform (l @ p).
+  , Bmap (Bdeterministic G) (uniform p) ~~ uniform (l @ p).
 Proof.
-intros. rewrite (Bmap_map G).
+intros. rewrite (Bmap_map (Bdeterministic G)).
 rewrite (@uniform_lift_id p).
 rewrite (@uniform_lift_id (l @ p)).
-rewrite (map_lift G p). 
+rewrite (map_lift (Bdeterministic G) p). 
 pose (mu := lift_dist p (lift_dist l (@uniform id))).
 unfold comp, id in mu.
 transitivity mu. unfold mu.
 pose proof (@lift_CI (fun x => Bvector (l x)) p
-  (map (toProg G) (uniform _))
+  (map (toProg (Bdeterministic G)) (uniform _))
   (lift_dist l (uniform id))).
 apply H0. assumption. clear H0. rewrite <- uniform_lift_id.
 apply (looks_random H). unfold mu. reflexivity.
 Qed.
 
-(** Problem Set 2, Question 4, part 2 *)
-
-(** G is a pseudorandom generator *)
-Variable len : nat -> nat.
-Variable G : BComp len.
-Hypothesis G_is_PRG : PRG G.
 
 Axiom output_bounds_cost : forall A (len cost : nat -> nat)
   (f : forall n, A n -> Comp (Bvector (len n))),
@@ -730,13 +790,6 @@ apply lift_cost. eassumption.
 apply polynomial_compose; assumption.
 Qed.
 
-Lemma G_len_PPT : PPT (fun n : nat => G (len n)).
-Proof.
-apply (@lift_PPT len _ _ G).
-eapply PPT_bounds_len. apply (is_PPT G_is_PRG).
-apply (is_PPT G_is_PRG).
-Qed.
-
 Instance CI_eq_subrelation A : subrelation (@eq_PrFam A) (@CI A).
 Proof.
 unfold subrelation, predicate_implication, pointwise_lifting.
@@ -744,117 +797,266 @@ unfold Basics.impl.
 intros. eapply CI_Proper. apply H. reflexivity. reflexivity.
 Qed.
 
-Theorem partA : PRG (Bcompose G G).
-Proof.
-constructor.
-- intros. pose proof (length_stretches G_is_PRG).
-  eapply Lt.lt_trans. apply H. apply H.
-- unfold id. rewrite Bmap_Bcompose.
-  transitivity (Bmap G (@uniform len)).
-  rewrite !Bmap_map. apply CI_cong. simpl. 
-  apply G_len_PPT.
-  apply (looks_random G_is_PRG).
-  apply looks_random_lift. assumption. unfold id.
-  intros. apply Lt.lt_le_weak. apply (length_stretches G_is_PRG).
-- unfold Bcompose. simpl.
-  apply PPT_compose.  apply G_is_PRG.
-  apply G_len_PPT.
-Qed.
-
 Definition Bdeterministic' {p l} (f : forall n, Bvector (p n) -> Bvector (l n))
   : forall n : nat, Bvector (p n) -> Comp (Bvector (l n)) :=
   fun n x => Ret (@Bvector_eq_dec _) (f n x).
 
-Definition truncate_lenG := 
-  (Bdeterministic' (truncate_fam len (length_stretches G_is_PRG))).
-
-Lemma truncate_lenG_PPT : PPT truncate_lenG.
-Proof.
-Admitted.
-
-Definition truncatedG : BComp S :=
-   compose G truncate_lenG.
 
 Lemma lift_id : forall {A B : nat -> Set} (f : forall n, A n -> Comp (B n)), lift id f = f.
 Proof.
 intros. reflexivity.
 Qed.
 
-Lemma partBlemma1 : (map truncate_lenG (uniform len) == uniform S)%Fam.
-Proof.
-unfold eq_PrFam. intros n. simpl. 
-unfold truncate_lenG, Bdeterministic', map.
-unfold uniform.
-Admitted.
-
-Lemma partBlemma : PRG truncatedG.
-Proof.
-constructor.
-- intros. unfold lt. reflexivity.
-- unfold truncatedG. rewrite Bmap_map. rewrite lift_id.
-  unfold id.
-  eapply CI_Proper. symmetry. apply map_compose. reflexivity.
-  rewrite <- partBlemma1.
-  apply CI_cong. apply truncate_lenG_PPT.
-  apply G_is_PRG.
-- unfold truncatedG. apply PPT_compose. apply G_is_PRG.
-  apply truncate_lenG_PPT.
-Qed.
-
 Definition shiftout_fam : forall n, Bvector n -> Bvector (pred n).
 Proof.
 destruct n. 
 - exact (fun x => x).
-- exact Vector.shiftout.
+- exact Vector.tl.
 Defined.
 
-Theorem partB : exists len' (G' : BComp len'),
- PRG G' /\ ~ (PRG (Bcompose G' (Bdeterministic shiftout_fam))).
+Definition det_compose {A B C : nat -> Set} (f : forall n, A n -> B n)
+  (g : forall n, B n -> C n) : forall n, A n -> C n := fun n x => g n (f n x).
+
+Definition Bdet_compose {lf lg} (f : BDetComp lf)
+  (g : BDetComp lg) : BDetComp (fun n => lg (lf n))
+  := fun n x => g (lf n) (f n x).
+
+Section Part2. 
+
+(** Problem Set 2, Question 4, part 2 *)
+
+(** G is a pseudorandom generator *)
+Variable len : nat -> nat.
+Variable G : BDetComp len.
+Hypothesis G_is_PRG : PRG G.
+
+Definition questionB := forall len' (G' : BDetComp len'),
+  PRG G' -> PRG (Bdet_compose G' shiftout_fam).
+
+Theorem lemmaB : questionB -> forall k, exists len' (G' : BDetComp len'),
+  PRG G' /\ (len 1 = k + len' 1)%nat.
 Proof.
-exists S. exists truncatedG. split. apply partBlemma.
-unfold not. intros. pose proof (length_stretches H) as contra.
-simpl in contra. specialize (contra 0%nat).
-unfold lt in contra. apply Le.le_Sn_0 in contra. assumption.
+intros. induction k.
+- exists len. exists G. split. assumption. reflexivity.
+- destruct IHk as (len' & G' & G'_is_PRG & G'len).
+  exists (fun n => pred (len' n)). exists (Bdet_compose G' shiftout_fam).
+  split.
+  apply H. assumption. rewrite G'len. simpl.
+  rewrite plus_n_Sm. rewrite  NPeano.Nat.succ_pred. reflexivity.
+  unfold not. intros contra. 
+  pose proof (length_stretches G'_is_PRG 1).
+  rewrite contra in H0. eapply Lt.lt_n_0. apply H0.
 Qed.
 
-Variable perm : forall n, Bvector n -> Bvector n.
-Hypothesis perm_is_permutation : forall n, permutation (perm n).
+Lemma sumkzero : forall k n, k = (k + n)%nat -> n = 0%nat.
+Proof.
+intros. induction k. simpl in H. rewrite H. reflexivity.
+apply IHk. simpl in H. injection H. auto.
+Qed.
 
-Definition h : BComp id := Bdeterministic perm.
+Theorem partB : ~ questionB.
+Proof.
+unfold not; intros contra.
+pose proof (lemmaB contra).
+specialize (H (len 1)).
+destruct H as (len' & G' & G'_is_PRG & lenG').
+pose proof (length_stretches G'_is_PRG 1).
+apply sumkzero in lenG'. rewrite lenG' in H.
+eapply Lt.lt_n_0. apply H.
+Qed.
 
-Hypothesis h_efficient : PPT h.
+Lemma G_len_PPT : PPT (fun n : nat => Bdeterministic G (len n)).
+Proof.
+apply (@lift_PPT len _ _ (Bdeterministic G)).
+eapply PPT_bounds_len. apply (is_PPT G_is_PRG).
+apply (is_PPT G_is_PRG).
+Qed.
 
-Theorem partC : PRG (Bcompose G h).
+Lemma evalDist_right_ident_not_broken :
+  forall (A : Set) eqd (c : Comp A) (a : A),
+  evalDist (Bind c (fun x : A => Ret eqd x)) a == evalDist c a.
+Proof.
+intros. simpl. destruct (in_dec eqd a (getSupport c)).
+- rewrite (@Fold.sumList_exactly_one _ a). rewrite eq_dec_refl.
+  apply ratMult_1_r. apply support_NoDup. assumption.
+  intros. destruct (eqd b a). congruence. apply ratMult_0_r.
+- apply getSupport_not_In_evalDist in n.
+  rewrite n. apply Fold.sumList_0. intros. 
+  destruct (eqd a0 a). subst. rewrite n. apply ratMult_0_l.
+  apply ratMult_0_r.
+Qed.  
+
+Lemma deterministic_compose : forall {l lf lg} (f : BDetComp lf) (g : BDetComp lg) (mu : BPrFamily l),
+  (Bmap (Bdeterministic (Bdet_compose f g)) mu == Bmap (Bcompose (Bdeterministic f) (Bdeterministic g)) mu)%Fam.
+Proof.
+intros. unfold Bdet_compose, Bcompose, Bdeterministic, Bmap, Bmapd.
+unfold eq_PrFam. intros n.
+unfold dist_sem_eq.
+intros. apply evalDist_seq_eq. intros; reflexivity.
+intros. simpl. 
+destruct (Bvector_eq_dec (g (lf (l n)) (f (l n) x)) a).
+rewrite (@Fold.sumList_exactly_one _ (f (l n) x)).
+rewrite e. rewrite !eq_dec_refl. symmetry. apply ratMult_1_r.
+repeat (constructor; auto). constructor. reflexivity.
+intros. destruct (Bvector_eq_dec (f (l n) x) b). congruence.
+apply ratMult_0_l. symmetry. apply Fold.sumList_0.
+intros. destruct (Bvector_eq_dec (f (l n) x) a0).
+destruct (Bvector_eq_dec (g (lf (l n)) a0) a).
+subst. congruence. apply ratMult_0_r. apply ratMult_0_l.
+Qed.
+
+Lemma PPT_det_compose : forall {lf lg} (f : BDetComp lf) (g : BDetComp lg), 
+  PPT (Bdeterministic f) -> PPT (fun n : nat => Bdeterministic g (lf n)) -> 
+  PPT (Bdeterministic (Bdet_compose f g)).
+Proof.
+Admitted.
+
+Theorem partA : PRG (Bdet_compose G G).
+Proof.
+constructor.
+- intros. pose proof (length_stretches G_is_PRG).
+  eapply Lt.lt_trans. apply H. apply H.
+- unfold id. rewrite deterministic_compose.
+  rewrite Bmap_Bcompose.
+  transitivity (Bmap (Bdeterministic G) (@uniform len)).
+  rewrite !Bmap_map. rewrite lift_id. 
+  unfold lift, Bdeterministic.
+  unfold Bmapd. simpl.
+  apply CI_cong. simpl. 
+  apply G_len_PPT.
+  apply (looks_random G_is_PRG).
+  apply looks_random_lift. assumption. unfold id.
+  intros. apply Lt.lt_le_weak. apply (length_stretches G_is_PRG).
+- apply PPT_det_compose.  apply G_is_PRG.
+  apply G_len_PPT.
+Qed.
+
+Variable h : BDetComp id.
+Hypothesis perm_is_permutation : forall n, permutation (h n).
+
+Hypothesis h_efficient : PPT (Bdeterministic h).
+
+Theorem partC : PRG (Bdet_compose G h).
 Proof.
 constructor.
 - intros. unfold id. apply (length_stretches G_is_PRG).
 - unfold id; simpl. change (fun x : nat => x) with (@id nat). 
   change (fun n => len n) with len. 
-  pose proof (Bmap_Bcompose _ _ _ G h (uniform id)). 
+  pose proof (Bmap_Bcompose _ _ _ (Bdeterministic G) (Bdeterministic h) (uniform id)). 
   unfold id in H; simpl in H.
-  rewrite H. clear H.
-  transitivity (Bmap h (@uniform len)).
+  pose proof (deterministic_compose (l:=id) G h (uniform id)).
+  unfold id in H0; simpl in H0. rewrite H0.
+  rewrite H. clear H H0.
+  transitivity (Bmap (Bdeterministic h) (@uniform len)).
   apply CI_cong. apply lift_PPT. eapply PPT_bounds_len.
   eapply G_is_PRG. apply h_efficient.
   apply G_is_PRG.
-  unfold h.
-  pose proof (Bpermutation perm perm_is_permutation len).
+  pose proof (Bpermutation h perm_is_permutation len).
   unfold id in H; simpl in H. rewrite H.
   reflexivity.
-- apply PPT_compose. apply G_is_PRG. 
+- apply PPT_det_compose. apply G_is_PRG. 
   apply lift_PPT. eapply PPT_bounds_len. apply G_is_PRG. 
   assumption.
 Qed.
 
-Theorem partD : PRG (Bcompose h G).
+Theorem partD : PRG (Bdet_compose h G).
 Proof.
 constructor.
 - intros. unfold id. apply G_is_PRG.
-- unfold id; simpl. rewrite Bmap_Bcompose.
-  transitivity (Bmap G (@uniform id)).
+- unfold id; simpl. 
+  rewrite deterministic_compose.
+  rewrite Bmap_Bcompose.
+  transitivity (Bmap (Bdeterministic G) (@uniform id)).
   apply CI_cong. apply G_is_PRG.
-  unfold h. unfold id; simpl. rewrite Bpermutation. reflexivity.
+  unfold id; simpl. rewrite Bpermutation. reflexivity.
   apply perm_is_permutation. apply G_is_PRG.
-- apply PPT_compose. apply h_efficient.
+- apply PPT_det_compose. apply h_efficient.
   apply G_is_PRG.
+Qed.
+
+End Part2.
+
+(** Problem 4.1 *)
+
+Section Part1.
+
+(** G extends lengths only by 1 *)
+Variable G : BDetComp S.
+Hypothesis G_is_PRG : PRG G.
+
+Variable p : nat -> nat.
+Hypothesis p_stretches : forall n, n < p n.
+Hypothesis p_poly : polynomial p.
+
+Definition extG := repeat_n_prg p (Bdeterministic G) p_stretches.
+
+Require Import Classical_Prop.
+
+Axiom classical : forall A (P : A -> Prop), 
+  (forall x : A, P x) \/ (exists x : A, ~ P x).
+
+Theorem Part1 : PRG extG.
+Proof.
+constructor.
+- apply p_stretches.
+- unfold id. simpl. unfold CI.
+  pose proof (classical _ (fun test => PPT test -> negligible (CSD_fam (Bmap extG (uniform (fun x => x))) (uniform p) test))). simpl in H.
+  destruct H. apply H.
+  destruct H as (dist & breaks_security).
+  apply imply_to_and in breaks_security.
+  destruct breaks_security as (distPPT & nonnegl).
+  assert (exists test', ~ negligible (CSD_fam (Bmap G (uniform id)) (uniform S) test') /\ PPT test').
+  admit.
+  destruct H as (test' & nonnegltest' & PPTtest').
+  apply False_rect. apply nonnegltest'.
+  apply G_is_PRG. assumption.
+- unfold extG. apply repeat_n_admissible. assumption.
+  apply G_is_PRG.
+Qed.
+
+Fixpoint maximum (xs : list Rat) : Rat := match xs with
+  | nil => 0
+  | cons x xs => maxRat x (maximum xs)
+  end.
+
+Lemma sumList_nil : forall {A : Set} (f : A -> Rat),
+  Fold.sumList nil f = 0.
+Proof.
+intros. unfold Fold.sumList. simpl. reflexivity.
+Qed.
+
+Lemma maxRat_l : forall x y, x <= maxRat x y.
+Proof.
+intros. unfold maxRat. destruct (bleRat x y) eqn:xy.
+unfold leRat. apply xy. reflexivity.
+Qed.
+
+Lemma maxRat_r : forall x y, y <= maxRat x y.
+Proof.
+intros. unfold maxRat. destruct (bleRat x y) eqn:xy.
+reflexivity. unfold leRat. apply bleRat_total. apply xy.
+Qed.
+
+Lemma maxRat_scales : forall c x y, maxRat x y * c == maxRat (x * c) (y * c).
+Proof.
+intros. apply leRat_impl_eqRat.
+- unfold maxRat at 1. destruct (bleRat x y).
+  apply maxRat_r. apply maxRat_l.
+- apply maxRat_leRat_same. apply ratMult_leRat_compat.
+  apply maxRat_l. reflexivity. apply ratMult_leRat_compat.
+  apply maxRat_r. reflexivity.
+Qed.
+
+Definition max_len_ge_sum : forall {A : Set} (xs : list A) (f : A -> Rat),
+  Fold.sumList xs f <= maximum (List.map f xs)  * (length xs / 1).
+Proof.
+intros. induction xs; simpl.
+- rewrite sumList_nil. reflexivity.
+- rewrite Fold.sumList_cons. 
+  rewrite IHxs. simpl.
+  rewrite ratS_num.
+  rewrite ratMult_distrib.
+  rewrite ratMult_1_r.
+  apply ratAdd_leRat_compat.
+  apply maxRat_l. rewrite maxRat_scales. apply maxRat_r.
 Qed.
