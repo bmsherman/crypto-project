@@ -1,59 +1,65 @@
-Require Import Asymptotic Rat WC_PolyTime.
+(** Import code from the Foundational Cryptography Framework (FCF) *)
 
-Require Import Admissibility Comp. 
+Require Import Asymptotic Rat WC_PolyTime Admissibility Comp Bvector
+               DetSem DistRules DistSem.
 
-Require Import Bvector.
 
-Section CSD.
 
+(** Function families from a family of types A to a family of types B. *)
+Notation "A ~> B" := (forall n, A n -> Comp (B n)) (at level 70).
+
+(** Composition of functions. *)
+Definition comp {B C} (g : B -> C) {A} (f : A -> B) (x : A) : C := g (f x).
+
+(** We will use the "@" sign for composition rather 
+    than ∘ because it is easier to type. *)
+Infix "@" := comp (at level 30).
+
+Definition compose {A B C : nat -> Set} (f : A ~> B)
+  (g : B ~> C) : A ~> C
+  := fun n x => Bind (f n x) (g n).
+
+(** Families of probability distributions. *)
+Definition Dist (A : nat -> Set) := forall n, Comp (A n).
+
+
+
+
+
+
+
+
+(** The FCF has a notion of "function cost models" which describe
+    legitimate ways of assigning a
+    numerical cost which is intended to be an upper bound on the maximum
+    amount of time a function requires to be evaluated.
+
+    However, it is not precise enough. In particular, the rules allow
+    every function to be assigned cost 0, as the following code shows.
+*)
+
+(** A trivial function cost model which assigns 0 cost to everything. *)
 Definition trivial_fcm : FunctionCostModel :=
   fun A B f x => True.
 
+(** This trivial function cost model obeys all of the rules. *)
 Theorem trivial_fcm_ok : function_cost_model trivial_fcm.
 Proof.
 unfold trivial_fcm; constructor; intros; auto.
 Qed.
 
+Section CSD.
+
+(** From now on, we will assume a function cost model that satisfies
+    the rules specified by the FCF. Noting that it is too weak,
+    we will later add an axiom that it also satisfies.
+*)
 Variable fcm : FunctionCostModel.
 Hypothesis fcm_facts : function_cost_model fcm.
 
 Definition ccm : CompCostModel := comp_cost fcm.
 
-Record Program {A B : nat -> Set} := 
-  { dom_eq_dec : forall n, eq_dec (A n)
-  ; run :> forall n, A n -> Comp (B n)
-  }.
-
-Arguments Program : clear implicits.
-
-Infix "~>" := Program (at level 70).
-
-Require Import DetSem DistRules DistSem.
-
-Record ProgramEquiv {A A' B B'} {f : A ~> B} {g : A' ~> B'} :=
-  { codom_eq : forall n, A n = A' n
-  ;   dom_eq : forall n, B n = B' n
-  ;   run_eq : forall n (x : A n), 
-    let x' : A' n := eq_rect (A n) (fun t => t) x _ (codom_eq n) in
-     dist_sem_eq 
-       (eq_rect _ _ (run f n x) _ (dom_eq n))
-       (run g n x')
-  }.
-
-Arguments ProgramEquiv {A} {A'} {B} {B'} f g : clear implicits. 
-
-Lemma transport {A A' B B'} :
-  (forall n, A n = A' n) -> (forall n, B n = B' n)
-  -> A ~> B -> A' ~> B'.
-Proof.
-intros. constructor.
-intros. rewrite <- H. apply (dom_eq_dec X).
-intros. rewrite <- H in H1. rewrite <- H0.
-apply (run X). assumption.
-Defined.
-
 Require Import Morphisms. 
-
 
 Instance dist_sem_eq_Reflexive : forall A, Reflexive (@dist_sem_eq A).
 Proof.
@@ -73,41 +79,23 @@ intros. unfold Transitive, dist_sem_eq. intros.
 transitivity (evalDist y a). apply H. apply H0.
 Qed.
 
-Lemma transport_equiv {A A' B B'} (Aeq : forall n, A n = A' n)
-  (Beq : forall n, B n = B' n) (f : A ~> B)
-  : ProgramEquiv f (transport Aeq Beq f).
-Proof.
-refine (
-  {| codom_eq := Aeq
-   ; dom_eq := Beq
-  |}).
-intros. simpl. destruct (Beq n). simpl.
-destruct (Aeq n). unfold eq_rec_r. simpl.
-unfold x'. simpl. reflexivity.
-Qed.
-
+(** This defines a way of assigning the cost of a probabilistic function from A to B
+    in terms of the cost of a deterministic functions from A to B and cost of
+    probabilistic expressions return something of type B. *)
 Inductive prg_cost {A B} {f : A -> Comp B} {cost : nat} : Prop :=
   Mkcomp_cost : forall c1 c2, fcm _ _ f c1 -> (forall x, ccm _ (f x) c2) -> c1 + c2 <= cost -> prg_cost.
 
 Arguments prg_cost {A} {B} f cost : clear implicits.
 
-Definition prog_cost {A B} (f : forall n, A n -> Comp (B n)) (cost : nat -> nat) : Prop :=
+(** Lift costs on functions to sequences of costs on function families. *)
+Definition prog_cost {A B} (f : A ~> B) (cost : nat -> nat) : Prop :=
   forall n, prg_cost (f n) (cost n).
 
-Definition comp {B C} (g : B -> C) {A} (f : A -> B) (x : A) : C := g (f x).
+Axiom cost_of_Bind : forall (A B C : Set) (f : A -> Comp B) (c : B -> Comp C) (cost : nat),
+  fcm A (Comp B) f cost ->
+  fcm A (Comp C) (fun x => Bind (f x) c) cost.
 
-Infix "@" := comp (at level 30).
-
-Definition compose {A B C} (f : forall n, A n -> Comp (B n))
-  (g : forall n, B n -> Comp (C n)) : forall n : nat, A n -> Comp (C n)
-  := fun n x => Bind (f n x) (g n).
-
-Definition composeP {A B C} (f : A ~> B) (g : B ~> C) : A ~> C :=
-  {| run := compose f g
-   ; dom_eq_dec := dom_eq_dec f
-  |}.
-
-Lemma compose_cost : forall A B C (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n)) costf costg,
+Lemma compose_cost : forall {A B C : nat -> Set} (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n)) costf costg,
   prog_cost f costf -> prog_cost g costg
   -> prog_cost (compose f g) (fun n => costf n + costg n).
 Proof.
@@ -115,7 +103,8 @@ intros. unfold prog_cost in *.
 intros n. specialize (H n). specialize (H0 n).
 induction H, H0. econstructor. simpl. instantiate (1 := c1).
 replace c1 with (c1 + 0 + 0) by omega.
-admit.
+unfold compose. rewrite <- !plus_n_O.
+apply cost_of_Bind. assumption.
 intros x. simpl. eapply comp_cost_Bind. simpl.
 unfold ccm in *. apply H1. apply H0.
 intros. apply H3. eapply Le.le_trans. Focus 2. 
@@ -123,15 +112,19 @@ apply Plus.plus_le_compat; eassumption.
 omega.
 Qed.
 
-Definition prg_id {A} (deceq : forall n, eq_dec (A n)) : A ~> A 
-  := {| run := fun n x => Ret (deceq n) x
-      ; dom_eq_dec := deceq
-     |}.
-
-Inductive PPT {A B} {f : forall n, A n -> Comp (B n)} : Prop :=
+Inductive PPT {A B} {f : A ~> B} : Prop :=
   IsPPT : forall cost, prog_cost f cost -> polynomial cost -> PPT.
 
 Arguments PPT {A} {B} f : clear implicits.
+
+Definition reindex (p : nat -> nat) {A B : nat -> Set} (f : A ~> B)
+  : A @ p ~> B @ p := fun n => f (p n).
+
+Lemma reindex_cost : forall (p : nat -> nat) A B (f : A ~> B) cost,
+  prog_cost f cost -> prog_cost (fun n => f (p n)) (fun n => cost (p n)).
+Proof.
+unfold prog_cost. intros. apply (H (p n)).
+Qed.
 
 Fixpoint repeat_k {A : nat -> Type} (k : nat) (f : forall n, A n -> (A (S n)))
   : forall n, A n -> A (k + n)
@@ -139,49 +132,6 @@ Fixpoint repeat_k {A : nat -> Type} (k : nat) (f : forall n, A n -> (A (S n)))
   | 0 => fun x => x
   | S k' => fun x => f _ (repeat_k k' f _ x)
   end. 
-
-Definition lift (p : nat -> nat) {A B : nat -> Set} (f : forall n, A n -> Comp (B n))
-  : forall n, A (p n) -> Comp (B (p n)) := fun n => f (p n).
-
-Lemma lift_cost : forall (p : nat -> nat) A B (f : forall n, A n -> Comp (B n)) cost,
-  prog_cost f cost -> prog_cost (fun n => f (p n)) (fun n => cost (p n)).
-Proof.
-unfold prog_cost. intros. apply (H (p n)).
-Qed.
-
-
-Require Import FunctionalExtensionality.
-Definition next_lift {A} {r} (k : nat) (f : A ~> A @ plus r) : 
-  A @ plus k ~> A @ plus (r + k).
-Proof.
-pose (
-{| run := fun n => run f (k + n)
-   ; dom_eq_dec := fun n => dom_eq_dec f (k + n)
-  |}
-) as f'.
-refine (transport _ _ f'); unfold comp; intros.
-reflexivity. rewrite Plus.plus_assoc. reflexivity.
-Defined.
-
-Definition repeat_k_prg {A : nat -> Set} (k : nat) (f : forall n, A n -> Comp (A (S n)))
-  : forall n, A n -> Comp (A (k + S n)).
-Proof.
-induction k.
-- simpl. apply f.
-- pose (compose f (lift S IHk)) as f'. intros.
-  simpl. rewrite plus_n_Sm.
-  apply f'. assumption.
-Defined.
-
-Definition repeat_n_prg {A : nat -> Set} (p : nat -> nat) (f : forall n, A n -> Comp (A (S n)))
-  (pmono : forall n, n < p n)
-  : forall n, A n -> Comp (A (p n)).
-Proof.
-intros n. unfold comp.
-rewrite (Minus.le_plus_minus _ _ (pmono n)).
-pose ((repeat_k_prg (p n - S n) f) n) as f'.
-rewrite Plus.plus_comm. apply f'.
-Defined.
 
 Fixpoint repeat_k_det {A : nat -> Set} (k : nat) (f : forall n, A n -> A (S n))
   : forall n, A n -> A (k + S n) := match k as k' return forall n, A n -> A (k' + S n) with
@@ -194,8 +144,8 @@ Definition repeat_n_det {A : nat -> Set} (p : nat -> nat) (f : forall n, A n -> 
 Proof.
 intros n. unfold comp.
 rewrite (Minus.le_plus_minus _ _ (pmono n)).
-pose ((repeat_k_det (p n - S n) f) n) as f'.
-rewrite Plus.plus_comm. apply f'.
+rewrite Plus.plus_comm.
+apply ((repeat_k_det (p n - S n) f) n).
 Defined.
 
 Theorem polynomial_compose : forall f g, polynomial f -> polynomial g
@@ -211,7 +161,6 @@ Definition Bmapd {A n} (f : A -> Bvector n) := fun x => Ret (@Bvector_eq_dec _) 
 
 Definition BComp (length : nat -> nat) := forall n, Bvector n -> Comp (Bvector (length n)).
 
-
 Definition Bdeterministic {l} (f : forall n, Bvector n -> Bvector (l n))
   : BComp l := fun n => Bmapd (f n).
 
@@ -226,7 +175,7 @@ apply polynomial_mult; try assumption.
 apply polynomial_compose; assumption.
 Admitted.
 
-Lemma PPT_compose : forall {A B C} (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n)),
+Lemma PPT_compose : forall {A B C : nat -> Set} (f : A ~> B) (g : B ~> C),
   PPT f -> PPT g -> PPT (compose f g).
 Proof.
 intros. destruct H, H0.
@@ -235,17 +184,19 @@ apply compose_cost; eassumption.
 apply polynomial_plus; assumption.
 Qed.
 
-Require Import DistSem Rat.
+Require Import Rat.
 
 Local Open Scope rat.
 
 Infix "==" := dist_sem_eq : Dist_scope.
 Delimit Scope Dist_scope with Dist.
 
+(** The computational statistical distance of two probability distributions
+    with respect to a (probabilistic) test algorithm. *)
 Definition CSD {A} (mu1 mu2 : Comp A) (test : A -> Comp bool)
   := | Pr [ Bind mu1 test ] - Pr [ Bind mu2 test ] |.
 
-Lemma CSD_self {A} : forall (mu : Comp A) (test : A -> Comp bool),
+Lemma CSD_refl {A} : forall (mu : Comp A) (test : A -> Comp bool),
   CSD mu mu test == 0.
 Proof.
 intros. unfold CSD.
@@ -265,80 +216,92 @@ Proof.
 intros. apply ratDistance_comm.
 Qed.
   
-
-Definition PrFamily (A : nat -> Set) := forall n, Comp (A n).
-
-Definition lift_dist {A} (p : nat -> nat) (mu : PrFamily A) : PrFamily (A @ p)
+Definition reindex_Dist {A} (p : nat -> nat) (mu : Dist A) : Dist (A @ p)
   := fun n => mu (p n).
 
-Definition Distinguisher (A : nat -> Set) := forall n, A n -> Comp ((fun _ => bool) n).
+Definition Distinguisher (A : nat -> Set) := A ~> (fun _ => bool).
 
-Definition map {A B : nat -> Set} (f : forall n, A n -> Comp (B n)) (mu : PrFamily A) : PrFamily B
+Definition ap {A B : nat -> Set} (f : A ~> B) (mu : Dist A) : Dist B
   := fun n => Bind (mu n) (f n).
 
-Definition eq_PrFam A (x y : PrFamily A) : Prop :=
+Definition eq_Dist A (x y : Dist A) : Prop :=
   forall n, (x n == y n)%Dist.
 
-Instance eq_PrFam_Equivalence : forall A, Equivalence (@eq_PrFam A).
+Instance eq_Dist_Equivalence : forall A, Equivalence (@eq_Dist A).
 Proof.
 intros. constructor; 
-unfold Reflexive, Symmetric, Transitive, eq_PrFam; intros.
+unfold Reflexive, Symmetric, Transitive, eq_Dist; intros.
 reflexivity. symmetry. apply H.
 transitivity (y n). apply H. apply H0. 
 Qed.
 
-Notation "x ={ A }= y" := (eq_PrFam A x y) (at level 70) : Fam_scope.
-Infix "==" := (eq_PrFam _) : Fam_scope. 
+Notation "x ={ A }= y" := (eq_Dist A x y) (at level 70) : Fam_scope.
+Infix "==" := (eq_Dist _) : Fam_scope. 
 Delimit Scope Fam_scope with Fam.
 
-Theorem map_compose : forall {A B C : nat -> Set} (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n))
-  (mu : PrFamily A),
-  (map g (map f mu) ={ C }= map (compose f g) mu)%Fam.
+Theorem ap_compose : forall {A B C : nat -> Set} (f : A ~> B) (g : B ~> C)
+  (mu : Dist A),
+  (ap g (ap f mu) ={ C }= ap (compose f g) mu)%Fam.
 Proof.
-intros. unfold eq_PrFam. intros.
+intros. unfold eq_Dist. intros.
 unfold map. simpl. apply evalDist_assoc_eq.
 Qed.
 
-Definition CSD_fam {A : nat -> Set} (mu1 mu2 : PrFamily A)
+(** Computational statistical distance for a pair of families
+    of probability distributions with respect to a family
+    of distinguishers. *)
+Definition CSD_fam {A : nat -> Set} (mu1 mu2 : Dist A)
   (test : Distinguisher A) (n : nat) : Rat :=
   CSD (mu1 n) (mu2 n) (test n).
 
-Definition CI (A : nat -> Set) (mu1 mu2 : PrFamily A) : Prop :=
+(** The definition of computational indistinguishability of two
+    families of probability distributions. *)
+Definition CI (A : nat -> Set) (mu1 mu2 : Dist A) : Prop :=
   forall test : Distinguisher A, PPT test ->
     negligible (CSD_fam mu1 mu2 test).
 
 Infix "~~" := (CI _) (at level 70).
 Notation "x ~{ A }~ y" := (CI A x y) (at level 70).
 
-Fixpoint bounded_lookup (p : nat -> bool) (bound : nat) : option { n | p n = true }.
+Fixpoint bounded_lookup (p : nat -> bool) (bound : nat) :
+ { n | p n = true } + (forall n, (n <= bound)%nat -> p n = false).
 Proof. 
 induction bound.
 - destruct (p 0%nat) eqn:p0. 
-  refine (Some (exist (fun n => p n = true) 0%nat p0)).
-  refine None.
+  refine (inl (exist (fun n => p n = true) 0%nat p0)).
+  right. intros. apply Le.le_n_0_eq in H.
+  subst. assumption.
 - destruct IHbound. 
-  refine (Some s).
+  refine (inl s).
   destruct (p (S bound)) eqn:ps.
-  refine (Some (exist (fun n => p n = true) (S bound) ps)).
-  refine None.
+  refine (inl (exist (fun n => p n = true) (S bound) ps)).
+  right. intros. destruct (Compare_dec.le_lt_dec (S bound) n).
+  assert (n = S bound) by (apply Le.le_antisym; assumption).
+  subst. assumption. unfold lt in l.
+  apply e. apply Le.le_S_n. assumption.
 Defined.
 
 Fixpoint pmono_partial_inverse (p : nat -> nat)
- (n : nat) : option { k | p k = n }.
+ (n : nat) : { k | p k = n } + (forall k, (k <= n)%nat -> p k <> n).
 Proof.
 pose (bounded_lookup (fun k => EqNat.beq_nat (p k) n) n) as ans.
 destruct ans.
 destruct s.
 rewrite EqNat.beq_nat_true_iff in e.
-refine (Some (exist _ x e)).
-exact None.
+refine (inl (exist _ x e)).
+right. intros. apply EqNat.beq_nat_false_iff. apply e.
+assumption.
 Defined.
 
 Definition pmono_partial_inverse_complete (p : nat -> nat)
   (pmono : forall n, (n <= p n)%nat)
-  : forall k : nat, exists k' prf, pmono_partial_inverse p (p k) = Some (exist _ k' prf).
+  : forall k : nat, exists k' prf, pmono_partial_inverse p (p k) = inl (exist _ k' prf).
 Proof.
-Admitted.
+intros k.
+destruct (pmono_partial_inverse p (p k)).
+destruct s as (k' & prf). exists k'. exists prf. reflexivity.
+pose proof (n k (pmono k)). congruence.
+Qed.
 
 Definition always_true {A} : A -> Comp bool := fun _ => Ret bool_dec true.
 
@@ -350,8 +313,8 @@ Proof.
 unfold Distinguisher, comp in *.
 intros n.
 refine (match pmono_partial_inverse p n with
-  | None => always_true
-  | Some (exist k prf) => eq_rect (p k) (fun i => A i -> Comp bool) (f k) n prf
+  | inr _ => always_true
+  | inl (exist k prf) => eq_rect (p k) (fun i => A i -> Comp bool) (f k) n prf
   end).
 Defined.
 
@@ -366,7 +329,7 @@ Require Import Eqdep_dec.
 Theorem unlift_distinguisher_behaves {p A}
   (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
   (pinj : forall m n, p m = p n -> m = n)
-  : forall (mu : PrFamily A) n, dist_sem_eq 
+  : forall (mu : Dist A) n, dist_sem_eq 
      (Bind (mu (p n)) (f n))
      (Bind (mu (p n)) (unlift_distinguisher pmono f (p n))).
 Proof.
@@ -382,17 +345,16 @@ Qed.
 Lemma unlift_distinguisher_CSD_fam {p A}
   (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
   (pinj : forall m n, p m = p n -> m = n)
-  : forall (mu1 mu2 : PrFamily A), pointwise_relation nat eqRat
-    (CSD_fam (lift_dist p mu1) (lift_dist p mu2) f)
+  : forall (mu1 mu2 : Dist A), pointwise_relation nat eqRat
+    (CSD_fam (reindex_Dist p mu1) (reindex_Dist p mu2) f)
     (CSD_fam mu1 mu2 (unlift_distinguisher pmono f) @ p).
 Proof.
 intros. unfold pointwise_relation. intros n.
-unfold CSD_fam, CSD, lift_dist, comp.
+unfold CSD_fam, CSD, reindex_Dist, comp.
 rewrite (unlift_distinguisher_behaves pmono f pinj mu1 n true).
 rewrite (unlift_distinguisher_behaves pmono f pinj mu2 n true).
 reflexivity.
 Qed.
-
 
 Lemma negligible_zero : negligible (fun _ => 0).
 Proof.
@@ -405,20 +367,20 @@ refine (@rat_num_nz 1%nat _ _ _).
 unfold gt, lt. reflexivity. apply H0.
 Qed.
 
-Lemma CI_refl {A} : forall (mu : PrFamily A), mu ~~ mu.
+Lemma CI_refl {A} : forall (mu : Dist A), mu ~~ mu.
 Proof.
 unfold CI. intros. eapply negligible_eq. apply negligible_zero. 
-intros. simpl. unfold CSD_fam. rewrite CSD_self.
+intros. simpl. unfold CSD_fam. rewrite CSD_refl.
 reflexivity.
 Qed.
 
-Lemma CI_sym {A} : forall (mu1 mu2 : PrFamily A), mu1 ~~ mu2 -> mu2 ~~ mu1.
+Lemma CI_sym {A} : forall (mu1 mu2 : Dist A), mu1 ~~ mu2 -> mu2 ~~ mu1.
 Proof.
 unfold CI. intros. eapply negligible_eq. apply H. eassumption.
 intros. apply CSD_sym.
 Qed.
 
-Lemma CI_trans {A} : forall (a b c : PrFamily A), a ~~ b -> b ~~ c -> a ~~ c.
+Lemma CI_trans {A} : forall (a b c : Dist A), a ~~ b -> b ~~ c -> a ~~ c.
 Proof.
 unfold CI. intros. eapply negligible_le.
 intros. apply (@CSD_triangle _ _ (b n)).
@@ -447,12 +409,12 @@ intros. constructor. apply CI_Reflexive. apply CI_Symmetric.
 apply CI_Transitive.
 Qed.
 
-Lemma CI_cong {A B} : forall (a b : PrFamily A) (f : forall n, A n -> Comp (B n)),
-  PPT f -> a ~{ A }~ b -> map f a ~{ B }~ map f b.
+Lemma CI_cong {A B} : forall (a b : Dist A) (f : forall n, A n -> Comp (B n)),
+  PPT f -> a ~{ A }~ b -> ap f a ~{ B }~ ap f b.
 Proof.
 unfold CI. intros.
-assert (forall n, CSD_fam (map f a) (map f b) test n == CSD_fam a b (compose f test) n).
-intros. unfold CSD_fam, map. simpl. unfold CSD. 
+assert (forall n, CSD_fam (ap f a) (ap f b) test n == CSD_fam a b (compose f test) n).
+intros. unfold CSD_fam, ap. simpl. unfold CSD. 
 pose proof (DistRules.evalDist_assoc_eq (a n) (f n) (test n) true).
 rewrite <- H2. 
 pose proof (DistRules.evalDist_assoc_eq (b n) (f n) (test n) true).
@@ -542,10 +504,10 @@ unfold Proper, respectful. intros. subst.
 unfold CSD. rewrite H, H0. reflexivity.
 Qed.
 
-Instance CSD_fam_Proper : forall A, Proper (eq_PrFam A ==> eq_PrFam A ==> eq ==> pointwise_relation _ eqRat) (@CSD_fam A).
+Instance CSD_fam_Proper : forall A, Proper (eq_Dist A ==> eq_Dist A ==> eq ==> pointwise_relation _ eqRat) (@CSD_fam A).
 Proof.
 intros. unfold Proper, respectful, pointwise_relation.
-intros. unfold CSD_fam. subst. unfold eq_PrFam in *.
+intros. unfold CSD_fam. subst. unfold eq_Dist in *.
 rewrite (H a), (H0 a). reflexivity.
 Qed.
 
@@ -556,7 +518,7 @@ intros. split; intros; eapply negligible_eq; eauto.
 intros. symmetry. apply H.
 Qed.
 
-Instance CI_Proper : forall A, Proper (eq_PrFam A ==> eq_PrFam A ==> iff) (@CI A).
+Instance CI_Proper : forall A, Proper (eq_Dist A ==> eq_Dist A ==> iff) (@CI A).
 Proof.
 unfold Proper, respectful, CI. intros. split; intros.
 - rewrite <- H, <- H0. apply H1; assumption.
@@ -569,7 +531,6 @@ intros. constructor. induction H0. unfold gt in *.
 apply Lt.lt_le_trans with x; assumption.
 Qed.
 
-
 Lemma leRat_denom : forall n (d1 d2 : nat)
   (nzd1 : StdNat.nz d1) (nzd2 : StdNat.nz d2),
   (d1 <= d2)%nat -> n / d2 <= n / d1.
@@ -580,7 +541,6 @@ reflexivity.
 pose proof (Mult.mult_le_compat_l d1 d2 n H).
 apply Gt.le_not_gt in H0. contradiction.
 Qed.
-
 
 Lemma negligible_compose_fast : forall f p
    (pmono : forall n, (n <= p n)%nat),
@@ -597,10 +557,10 @@ clear H0. apply leRat_denom.
 apply StdNat.expnat_base_le. apply pmono.
 Qed.
 
-Lemma lift_CI' {A} (p : nat -> nat) (mu1 mu2 : PrFamily A)
+Lemma lift_CI' {A} (p : nat -> nat) (mu1 mu2 : Dist A)
   (pmono : forall n, (n <= p n)%nat)
   (pinj : forall m n, p m = p n -> m = n)
-  : mu1 ~~ mu2 -> lift_dist p mu1 ~~ lift_dist p mu2.
+  : mu1 ~~ mu2 -> reindex_Dist p mu1 ~~ reindex_Dist p mu2.
 Proof.
 unfold CI. intros. simpl.
 specialize (H (unlift_distinguisher pmono test) 
@@ -610,20 +570,20 @@ apply negligible_compose_fast. apply pmono. assumption.
 Qed.
 
 (** this just lies to get rid of one of the assumptions *)
-Lemma lift_CI {A} (p : nat -> nat) (mu1 mu2 : PrFamily A)
+Lemma lift_CI {A} (p : nat -> nat) (mu1 mu2 : Dist A)
   (pmono : forall n, (n <= p n)%nat)
-  : mu1 ~~ mu2 -> lift_dist p mu1 ~~ lift_dist p mu2.
+  : mu1 ~~ mu2 -> reindex_Dist p mu1 ~~ reindex_Dist p mu2.
 Proof.
 intros. apply lift_CI'; try assumption.
 admit.
 Qed.
 
 
-Definition BPrFamily (length : nat -> nat) := forall n, Comp (Bvector (length n)).
+Definition BDist (length : nat -> nat) := forall n, Comp (Bvector (length n)).
 
-Definition uniform l : BPrFamily l := fun n => Rnd (l n).
+Definition uniform l : BDist l := fun n => Rnd (l n).
 
-Lemma uniform_lift_id {l} : uniform l = lift_dist l (uniform id).
+Lemma uniform_lift_id {l} : uniform l = reindex_Dist l (uniform id).
 Proof. 
 reflexivity.
 Qed.
@@ -632,21 +592,15 @@ Definition Bcompose {l1 l2} (f : BComp l1) (g : BComp l2)
   : BComp (fun n => l2 (l1 n))
   := fun n x => Bind (f n x) (g (l1 n)).
 
-Definition toProg {l} (f : BComp l) : Bvector ~> Bvector @ l.
-Proof.
-refine ({| run := f |}).
-intros. unfold eq_dec. apply Bvector_eq_dec.
-Defined.
-
-Definition Bmap {lf lmu} (f : BComp lf) (mu : BPrFamily lmu)
-  : BPrFamily (fun n => lf (lmu n))
+Definition Bmap {lf lmu} (f : BComp lf) (mu : BDist lmu)
+  : BDist (fun n => lf (lmu n))
   := fun n => Bind (mu n) (f (lmu n)).
 
 Lemma Bmap_Bcompose : forall l l1 l2 (f : BComp l1) (g : BComp l2),
-  forall (mu : BPrFamily l), (Bmap (Bcompose f g) mu == Bmap g (Bmap f mu))%Fam.
+  forall (mu : BDist l), (Bmap (Bcompose f g) mu == Bmap g (Bmap f mu))%Fam.
 Proof.
 intros.
-unfold Bmap, Bcompose, eq_PrFam.
+unfold Bmap, Bcompose, eq_Dist.
 intros. symmetry. apply evalDist_assoc_eq.
 Qed.
 
@@ -655,44 +609,18 @@ Definition Bpermutation (f : forall n, Bvector n -> Bvector n)
   (l : nat -> nat)
   : (Bmap (Bdeterministic f) (uniform l) == uniform l)%Fam.
 Proof.
-unfold eq_PrFam. intros n.
+unfold eq_Dist. intros n.
 unfold Bmap, Bdeterministic, uniform.
 pose proof perm_uniform_Bvector as H.
 unfold map_prob in H. symmetry. apply H.
 apply permf.
 Qed.
 
-Lemma Bmap_map {l lf} : forall (f : BComp lf) (mu : BPrFamily l),
-  Bmap f mu = map (lift l f) mu.
+Lemma Bmap_ap {l lf} : forall (f : BComp lf) (mu : BDist l),
+  Bmap f mu = ap (reindex l f) mu.
 Proof.
-intros. unfold Bmap, map. simpl. reflexivity.
+intros. unfold Bmap, ap. simpl. reflexivity.
 Qed.
-
-Lemma tl_uniform : forall n, (Bind (Rnd (S n)) (Bmapd Vector.tl) == Rnd n)%Dist.
-Proof.
-intros n. unfold dist_sem_eq. intros v.
-simpl. rewrite Fold.sumList_app. rewrite !Fold.sumList_map.
-rewrite !(@Fold.sumList_exactly_one _ v). simpl.
-rewrite ratMult_2, eq_dec_refl. rewrite !ratMult_1_r. 
-rewrite <- rat_mult_den.
-unfold eqRat, beqRat. simpl. 
-match goal with 
-| [ |- (if ?e then _ else _) = _ ] => destruct e
-end. reflexivity. apply False_rect. apply n0. clear n0.
-omega.
-apply getAllBvectors_NoDup. apply in_getAllBvectors.
-simpl. intros.  destruct (Bvector_eq_dec b v). congruence.
-apply ratMult_0_r.
-apply getAllBvectors_NoDup. apply in_getAllBvectors.
-simpl. intros. destruct (Bvector_eq_dec b v). congruence.
-apply ratMult_0_r.
-Qed.
-
-Fixpoint truncate k : forall n, Bvector (k + n) -> Bvector n :=
-  match k as k' return forall n, Bvector (k' + n) -> Bvector n  with
-  | 0 => fun n x => x
-  | S k' => fun n x => truncate k' n (Vector.tl x)
-  end.
 
 Lemma Bmapd_compose : forall (A : Set) n m (f : A -> Bvector n) (g : Bvector n -> Bvector m)
   mu, 
@@ -714,16 +642,6 @@ intros. rewrite (evalDist_left_ident_eq (Bvector_EqDec n)).
 reflexivity.
 Qed.
 
-Lemma truncate_uniform : forall k n, (Bind (Rnd (k + n)) (Bmapd (truncate k n)) == Rnd n)%Dist.
-Proof.
-intros k. induction k.
-- simpl. unfold truncate. simpl. unfold Bmapd.
-  intros n. unfold dist_sem_eq. 
-  intros x. apply evalDist_right_ident.
-- intros n. simpl. rewrite Bmapd_compose2.
-  rewrite tl_uniform. fold plus. apply IHk.
-Qed.
-
 Definition BDetComp (l : nat -> nat) := forall n, Bvector n -> Bvector (l (n)).
 
 Record PRG {l : nat -> nat} {G : BDetComp l} :=
@@ -734,26 +652,26 @@ Record PRG {l : nat -> nat} {G : BDetComp l} :=
 
 Arguments PRG {l} G : clear implicits.
 
-Lemma map_lift : forall {A B : nat -> Set} (f : forall n, A n -> Comp (B n)) p mu, map (lift p f) (lift_dist p mu)
-  = lift_dist p (map f mu).
+Lemma ap_reindex : forall {A B : nat -> Set} (f : forall n, A n -> Comp (B n)) p mu, ap (reindex p f) (reindex_Dist p mu)
+  = reindex_Dist p (ap f mu).
 Proof.
-intros. unfold map, lift_dist. simpl. reflexivity.
+intros. unfold map, reindex_Dist. simpl. reflexivity.
 Qed.
 
 Lemma looks_random_lift {l G} : @PRG l G
   -> forall (p : nat -> nat) (pmono : forall n, (n <= p n)%nat)
   , Bmap (Bdeterministic G) (uniform p) ~~ uniform (l @ p).
 Proof.
-intros. rewrite (Bmap_map (Bdeterministic G)).
+intros. rewrite (Bmap_ap (Bdeterministic G)).
 rewrite (@uniform_lift_id p).
 rewrite (@uniform_lift_id (l @ p)).
-rewrite (map_lift (Bdeterministic G) p). 
-pose (mu := lift_dist p (lift_dist l (@uniform id))).
+rewrite (ap_reindex (Bdeterministic G) p). 
+pose (mu := reindex_Dist p (reindex_Dist l (@uniform id))).
 unfold comp, id in mu.
 transitivity mu. unfold mu.
 pose proof (@lift_CI (fun x => Bvector (l x)) p
-  (map (toProg (Bdeterministic G)) (uniform _))
-  (lift_dist l (uniform id))).
+  (ap (Bdeterministic G) (uniform _))
+  (reindex_Dist l (uniform id))).
 apply H0. assumption. clear H0. rewrite <- uniform_lift_id.
 apply (looks_random H). unfold mu. reflexivity.
 Qed.
@@ -780,17 +698,17 @@ eapply output_bounds_cost. eassumption.
 assumption.
 Qed.
 
-Lemma lift_PPT : forall (p : nat -> nat) {A B}
+Lemma reindex_PPT : forall (p : nat -> nat) {A B}
   (f : forall n, A n -> Comp (B n)),
   polynomial p ->
   PPT f -> PPT (fun n => f (p n)).
 Proof.
 intros. induction H0. econstructor.
-apply lift_cost. eassumption.
+apply reindex_cost. eassumption.
 apply polynomial_compose; assumption.
 Qed.
 
-Instance CI_eq_subrelation A : subrelation (@eq_PrFam A) (@CI A).
+Instance CI_eq_subrelation A : subrelation (@eq_Dist A) (@CI A).
 Proof.
 unfold subrelation, predicate_implication, pointwise_lifting.
 unfold Basics.impl.
@@ -802,17 +720,18 @@ Definition Bdeterministic' {p l} (f : forall n, Bvector (p n) -> Bvector (l n))
   fun n x => Ret (@Bvector_eq_dec _) (f n x).
 
 
-Lemma lift_id : forall {A B : nat -> Set} (f : forall n, A n -> Comp (B n)), lift id f = f.
+Lemma reindex_id : forall {A B : nat -> Set} (f : A ~> B), 
+  reindex id f = f 
+  :> (A @ id ~> B @ id).
 Proof.
 intros. reflexivity.
 Qed.
 
-Definition shiftout_fam : forall n, Bvector n -> Bvector (pred n).
-Proof.
-destruct n. 
-- exact (fun x => x).
-- exact Vector.tl.
-Defined.
+Definition shiftout_fam : forall n, Bvector n -> Bvector (pred n) := 
+  fun n => match n with
+  | 0 => fun x => x
+  | S n' => Vector.shiftout
+  end.
 
 Definition det_compose {A B C : nat -> Set} (f : forall n, A n -> B n)
   (g : forall n, B n -> C n) : forall n, A n -> C n := fun n x => g n (f n x).
@@ -867,7 +786,7 @@ Qed.
 
 Lemma G_len_PPT : PPT (fun n : nat => Bdeterministic G (len n)).
 Proof.
-apply (@lift_PPT len _ _ (Bdeterministic G)).
+apply (@reindex_PPT len _ _ (Bdeterministic G)).
 eapply PPT_bounds_len. apply (is_PPT G_is_PRG).
 apply (is_PPT G_is_PRG).
 Qed.
@@ -886,11 +805,11 @@ intros. simpl. destruct (in_dec eqd a (getSupport c)).
   apply ratMult_0_r.
 Qed.  
 
-Lemma deterministic_compose : forall {l lf lg} (f : BDetComp lf) (g : BDetComp lg) (mu : BPrFamily l),
+Lemma deterministic_compose : forall {l lf lg} (f : BDetComp lf) (g : BDetComp lg) (mu : BDist l),
   (Bmap (Bdeterministic (Bdet_compose f g)) mu == Bmap (Bcompose (Bdeterministic f) (Bdeterministic g)) mu)%Fam.
 Proof.
 intros. unfold Bdet_compose, Bcompose, Bdeterministic, Bmap, Bmapd.
-unfold eq_PrFam. intros n.
+unfold eq_Dist. intros n.
 unfold dist_sem_eq.
 intros. apply evalDist_seq_eq. intros; reflexivity.
 intros. simpl. 
@@ -919,8 +838,10 @@ constructor.
 - unfold id. rewrite deterministic_compose.
   rewrite Bmap_Bcompose.
   transitivity (Bmap (Bdeterministic G) (@uniform len)).
-  rewrite !Bmap_map. rewrite lift_id. 
-  unfold lift, Bdeterministic.
+  rewrite !Bmap_ap. 
+  replace (reindex (fun x : nat => x) (Bdeterministic G))
+    with (Bdeterministic G) by reflexivity.
+  unfold reindex, Bdeterministic.
   unfold Bmapd. simpl.
   apply CI_cong. simpl. 
   apply G_len_PPT.
@@ -948,14 +869,14 @@ constructor.
   unfold id in H0; simpl in H0. rewrite H0.
   rewrite H. clear H H0.
   transitivity (Bmap (Bdeterministic h) (@uniform len)).
-  apply CI_cong. apply lift_PPT. eapply PPT_bounds_len.
+  apply CI_cong. apply reindex_PPT. eapply PPT_bounds_len.
   eapply G_is_PRG. apply h_efficient.
   apply G_is_PRG.
   pose proof (Bpermutation h perm_is_permutation len).
   unfold id in H; simpl in H. rewrite H.
   reflexivity.
 - apply PPT_det_compose. apply G_is_PRG. 
-  apply lift_PPT. eapply PPT_bounds_len. apply G_is_PRG. 
+  apply reindex_PPT. eapply PPT_bounds_len. apply G_is_PRG. 
   assumption.
 Qed.
 
@@ -1059,4 +980,138 @@ intros. induction xs; simpl.
   rewrite ratMult_1_r.
   apply ratAdd_leRat_compat.
   apply maxRat_l. rewrite maxRat_scales. apply maxRat_r.
+Qed.
+
+End Part1.
+
+End CSD.     
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+(** DEAD CODE *)
+
+
+Record Program {A B : nat -> Set} := 
+  { dom_eq_dec : forall n, eq_dec (A n)
+  ; run :> forall n, A n -> Comp (B n)
+  }.
+
+Arguments Program : clear implicits.
+
+Infix "~>" := Program (at level 70).
+
+Record ProgramEquiv {A A' B B'} {f : A ~> B} {g : A' ~> B'} :=
+  { codom_eq : forall n, A n = A' n
+  ;   dom_eq : forall n, B n = B' n
+  ;   run_eq : forall n (x : A n), 
+    let x' : A' n := eq_rect (A n) (fun t => t) x _ (codom_eq n) in
+     dist_sem_eq 
+       (eq_rect _ _ (run f n x) _ (dom_eq n))
+       (run g n x')
+  }.
+
+Arguments ProgramEquiv {A} {A'} {B} {B'} f g : clear implicits. 
+
+Lemma transport {A A' B B'} :
+  (forall n, A n = A' n) -> (forall n, B n = B' n)
+  -> A ~> B -> A' ~> B'.
+Proof.
+intros. constructor.
+intros. rewrite <- H. apply (dom_eq_dec X).
+intros. rewrite <- H in H1. rewrite <- H0.
+apply (run X). assumption.
+Defined.
+
+Lemma transport_equiv {A A' B B'} (Aeq : forall n, A n = A' n)
+  (Beq : forall n, B n = B' n) (f : A ~> B)
+  : ProgramEquiv f (transport Aeq Beq f).
+Proof.
+refine (
+  {| codom_eq := Aeq
+   ; dom_eq := Beq
+  |}).
+intros. simpl. destruct (Beq n). simpl.
+destruct (Aeq n). unfold eq_rec_r. simpl.
+unfold x'. simpl. reflexivity.
+Qed.
+
+Definition composeP {A B C} (f : A ~> B) (g : B ~> C) : A ~> C :=
+  {| run := compose f g
+   ; dom_eq_dec := dom_eq_dec f
+  |}.
+
+Definition prg_id {A} (deceq : forall n, eq_dec (A n)) : A ~> A 
+  := {| run := fun n x => Ret (deceq n) x
+      ; dom_eq_dec := deceq
+     |}.
+
+Definition next_lift {A} {r} (k : nat) (f : A ~> A @ plus r) : 
+  A @ plus k ~> A @ plus (r + k).
+Proof.
+pose (
+{| run := fun n => run f (k + n)
+   ; dom_eq_dec := fun n => dom_eq_dec f (k + n)
+  |}
+) as f'.
+refine (transport _ _ f'); unfold comp; intros.
+reflexivity. rewrite Plus.plus_assoc. reflexivity.
+Defined.
+
+Definition toProg {l} (f : BComp l) : Bvector ~> Bvector @ l.
+Proof.
+refine ({| run := f |}).
+intros. unfold eq_dec. apply Bvector_eq_dec.
+Defined.
+
+Lemma tl_uniform : forall n, (Bind (Rnd (S n)) (Bmapd Vector.tl) == Rnd n)%Dist.
+Proof.
+intros n. unfold dist_sem_eq. intros v.
+simpl. rewrite Fold.sumList_app. rewrite !Fold.sumList_map.
+rewrite !(@Fold.sumList_exactly_one _ v). simpl.
+rewrite ratMult_2, eq_dec_refl. rewrite !ratMult_1_r. 
+rewrite <- rat_mult_den.
+unfold eqRat, beqRat. simpl. 
+match goal with 
+| [ |- (if ?e then _ else _) = _ ] => destruct e
+end. reflexivity. apply False_rect. apply n0. clear n0.
+omega.
+apply getAllBvectors_NoDup. apply in_getAllBvectors.
+simpl. intros.  destruct (Bvector_eq_dec b v). congruence.
+apply ratMult_0_r.
+apply getAllBvectors_NoDup. apply in_getAllBvectors.
+simpl. intros. destruct (Bvector_eq_dec b v). congruence.
+apply ratMult_0_r.
+Qed.
+
+Fixpoint truncate k : forall n, Bvector (k + n) -> Bvector n :=
+  match k as k' return forall n, Bvector (k' + n) -> Bvector n  with
+  | 0 => fun n x => x
+  | S k' => fun n x => truncate k' n (Vector.tl x)
+  end.
+
+Lemma truncate_uniform : forall k n, (Bind (Rnd (k + n)) (Bmapd (truncate k n)) == Rnd n)%Dist.
+Proof.
+intros k. induction k.
+- simpl. unfold truncate. simpl. unfold Bmapd.
+  intros n. unfold dist_sem_eq. 
+  intros x. apply evalDist_right_ident.
+- intros n. simpl. rewrite Bmapd_compose2.
+  rewrite tl_uniform. fold plus. apply IHk.
 Qed.
