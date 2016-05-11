@@ -287,7 +287,7 @@ Definition CI (A : nat -> Set) (mu1 mu2 : Dist A) : Prop :=
 
 (** Notations for representing computational indistinguishability. *)
 Infix "~~" := (CI _) (at level 70).
-Notation "x ~{ A }~ y" := (CI A x y) (at level 70).
+(*Notation "x ~{ A }~ y" := (CI A x y) (at level 70).*)
 
 
 
@@ -350,7 +350,7 @@ apply CI_Transitive.
 Qed.
 
 Lemma CI_cong {A B} : forall (a b : Dist A) (f : forall n, A n -> Comp (B n)),
-  PPT f -> a ~{ A }~ b -> ap f a ~{ B }~ ap f b.
+  PPT f -> a ~~ b -> ap f a ~~ ap f b.
 Proof.
 unfold CI. intros.
 assert (forall n, CSD_fam (ap f a) (ap f b) test n == CSD_fam a b (compose f test) n).
