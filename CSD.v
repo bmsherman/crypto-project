@@ -3,6 +3,42 @@
 Require Import Asymptotic Rat WC_PolyTime Admissibility Comp Bvector
                DetSem DistRules DistSem.
 
+Local Open Scope rat.
+
+
+(** Various unassorted but useful lemmas. *)
+
+Lemma nz_le : forall x y, (x <= y)%nat -> StdNat.nz x -> StdNat.nz y.
+Proof.
+intros. constructor. induction H0. unfold gt in *. 
+apply Lt.lt_le_trans with x; assumption.
+Qed.
+
+Lemma leRat_denom : forall n (d1 d2 : nat)
+  (nzd1 : StdNat.nz d1) (nzd2 : StdNat.nz d2),
+  (d1 <= d2)%nat -> n / d2 <= n / d1.
+Proof.
+intros. unfold leRat, bleRat. simpl.
+destruct (Compare_dec.le_gt_dec (n * d1) (n * d2)).
+reflexivity.
+pose proof (Mult.mult_le_compat_l d1 d2 n H).
+apply Gt.le_not_gt in H0. contradiction.
+Qed.
+
+(** The composition of two polynomially-bounded functions
+    is polynomially bounded. This is a well-known result,
+    but with this representation of polynomial-boundedness, it is
+    not very easy to prove, so I will just admit it as a lemma. *)
+Theorem polynomial_compose : forall f g, polynomial f -> polynomial g
+  -> polynomial (fun n => g (f n)).
+Proof.
+intros. unfold polynomial.
+destruct H as (fx & fc1 & fc2 & Pf).
+destruct H0 as (gx & gc1 & gc2 & Pg).
+exists (gx * fx)%nat.
+Admitted.
+
+
 
 
 (** Function families from a family of types A to a family of types B. *)
@@ -83,7 +119,7 @@ Qed.
     in terms of the cost of a deterministic functions from A to B and cost of
     probabilistic expressions return something of type B. *)
 Inductive prg_cost {A B} {f : A -> Comp B} {cost : nat} : Prop :=
-  Mkcomp_cost : forall c1 c2, fcm _ _ f c1 -> (forall x, ccm _ (f x) c2) -> c1 + c2 <= cost -> prg_cost.
+  Mkcomp_cost : forall c1 c2, fcm _ _ f c1 -> (forall x, ccm _ (f x) c2) -> (c1 + c2 <= cost)%nat -> prg_cost.
 
 Arguments prg_cost {A} {B} f cost : clear implicits.
 
@@ -97,12 +133,12 @@ Axiom cost_of_Bind : forall (A B C : Set) (f : A -> Comp B) (c : B -> Comp C) (c
 
 Lemma compose_cost : forall {A B C : nat -> Set} (f : forall n, A n -> Comp (B n)) (g : forall n, B n -> Comp (C n)) costf costg,
   prog_cost f costf -> prog_cost g costg
-  -> prog_cost (compose f g) (fun n => costf n + costg n).
+  -> prog_cost (compose f g) (fun n => costf n + costg n)%nat.
 Proof.
 intros. unfold prog_cost in *. 
 intros n. specialize (H n). specialize (H0 n).
 induction H, H0. econstructor. simpl. instantiate (1 := c1).
-replace c1 with (c1 + 0 + 0) by omega.
+replace c1 with (c1 + 0 + 0)%nat by omega.
 unfold compose. rewrite <- !plus_n_O.
 apply cost_of_Bind. assumption.
 intros x. simpl. eapply comp_cost_Bind. simpl.
@@ -126,36 +162,24 @@ Proof.
 unfold prog_cost. intros. apply (H (p n)).
 Qed.
 
-Fixpoint repeat_k {A : nat -> Type} (k : nat) (f : forall n, A n -> (A (S n)))
-  : forall n, A n -> A (k + n)
-  := fun n => match k with
-  | 0 => fun x => x
-  | S k' => fun x => f _ (repeat_k k' f _ x)
-  end. 
-
-Fixpoint repeat_k_det {A : nat -> Set} (k : nat) (f : forall n, A n -> A (S n))
-  : forall n, A n -> A (k + S n) := match k as k' return forall n, A n -> A (k' + S n) with
-  | 0 => f
-  | S k' => fun n x => f _ (repeat_k_det k' f n x)
+Fixpoint repeat_k {A : nat -> Set} (k : nat) (f : forall n, A n -> A (S n))
+  : forall n, A n -> A (k + n)%nat := match k as k' return forall n, A n -> A (k' + n)%nat with
+  | 0 => fun n x => x
+  | S k' => fun n x => f _ (repeat_k k' f n x)
   end.
 
-Definition repeat_n_det {A : nat -> Set} (p : nat -> nat) (f : forall n, A n -> A (S n))
-  (pmono : forall n, n < p n) : forall n, A n -> A (p n).
+Definition repeat_n {A : nat -> Set} (p : nat -> nat) (f : forall n, A n -> A (S n))
+  : forall n, A n -> A (p n - n + n)%nat
+  := fun n => repeat_k (p n - n)%nat f n.
+
+Definition repeat_n_correct_ty {A : nat -> Set} p (pmono : forall n, (n <= p n)%nat)(f : forall n, A n -> A (S n))
+  : forall n, A n -> A (p n).
 Proof.
-intros n. unfold comp.
+intros n.
 rewrite (Minus.le_plus_minus _ _ (pmono n)).
 rewrite Plus.plus_comm.
-apply ((repeat_k_det (p n - S n) f) n).
+apply (repeat_n p f).
 Defined.
-
-Theorem polynomial_compose : forall f g, polynomial f -> polynomial g
-  -> polynomial (fun n => g (f n)).
-Proof.
-intros. unfold polynomial.
-destruct H as (fx & fc1 & fc2 & Pf).
-destruct H0 as (gx & gc1 & gc2 & Pg).
-exists (gx * fx).
-Admitted.
 
 Definition Bmapd {A n} (f : A -> Bvector n) := fun x => Ret (@Bvector_eq_dec _) (f x).
 
@@ -166,10 +190,10 @@ Definition Bdeterministic {l} (f : forall n, Bvector n -> Bvector (l n))
 
 Theorem repeat_n_admissible : forall (f : forall n, Bvector n -> Bvector (S n))
   (p : nat -> nat) (pmono : forall n, n < p n), polynomial p ->
-  PPT (Bdeterministic f) -> PPT (Bdeterministic (repeat_n_det p f pmono)).
+  PPT (Bdeterministic f) -> PPT (Bdeterministic (repeat_n p f)).
 Proof.
 intros. induction H0.
-apply IsPPT with (fun n => p n * cost (p n)).
+apply IsPPT with (fun n => p n * cost (p n))%nat.
 admit.
 apply polynomial_mult; try assumption.
 apply polynomial_compose; assumption.
@@ -196,6 +220,7 @@ Delimit Scope Dist_scope with Dist.
 Definition CSD {A} (mu1 mu2 : Comp A) (test : A -> Comp bool)
   := | Pr [ Bind mu1 test ] - Pr [ Bind mu2 test ] |.
 
+(** Several nice properties of the computational statistical distance. *)
 Lemma CSD_refl {A} : forall (mu : Comp A) (test : A -> Comp bool),
   CSD mu mu test == 0.
 Proof.
@@ -260,101 +285,16 @@ Definition CI (A : nat -> Set) (mu1 mu2 : Dist A) : Prop :=
   forall test : Distinguisher A, PPT test ->
     negligible (CSD_fam mu1 mu2 test).
 
+(** Notations for representing computational indistinguishability. *)
 Infix "~~" := (CI _) (at level 70).
 Notation "x ~{ A }~ y" := (CI A x y) (at level 70).
 
-Fixpoint bounded_lookup (p : nat -> bool) (bound : nat) :
- { n | p n = true } + (forall n, (n <= bound)%nat -> p n = false).
-Proof. 
-induction bound.
-- destruct (p 0%nat) eqn:p0. 
-  refine (inl (exist (fun n => p n = true) 0%nat p0)).
-  right. intros. apply Le.le_n_0_eq in H.
-  subst. assumption.
-- destruct IHbound. 
-  refine (inl s).
-  destruct (p (S bound)) eqn:ps.
-  refine (inl (exist (fun n => p n = true) (S bound) ps)).
-  right. intros. destruct (Compare_dec.le_lt_dec (S bound) n).
-  assert (n = S bound) by (apply Le.le_antisym; assumption).
-  subst. assumption. unfold lt in l.
-  apply e. apply Le.le_S_n. assumption.
-Defined.
 
-Fixpoint pmono_partial_inverse (p : nat -> nat)
- (n : nat) : { k | p k = n } + (forall k, (k <= n)%nat -> p k <> n).
-Proof.
-pose (bounded_lookup (fun k => EqNat.beq_nat (p k) n) n) as ans.
-destruct ans.
-destruct s.
-rewrite EqNat.beq_nat_true_iff in e.
-refine (inl (exist _ x e)).
-right. intros. apply EqNat.beq_nat_false_iff. apply e.
-assumption.
-Defined.
 
-Definition pmono_partial_inverse_complete (p : nat -> nat)
-  (pmono : forall n, (n <= p n)%nat)
-  : forall k : nat, exists k' prf, pmono_partial_inverse p (p k) = inl (exist _ k' prf).
-Proof.
-intros k.
-destruct (pmono_partial_inverse p (p k)).
-destruct s as (k' & prf). exists k'. exists prf. reflexivity.
-pose proof (n k (pmono k)). congruence.
-Qed.
-
-Definition always_true {A} : A -> Comp bool := fun _ => Ret bool_dec true.
-
-Definition unlift_distinguisher {p A} 
-  (pmono : forall n, (n <= p n)%nat)
-  (f : Distinguisher (A @ p))
-  : Distinguisher A.
-Proof.
-unfold Distinguisher, comp in *.
-intros n.
-refine (match pmono_partial_inverse p n with
-  | inr _ => always_true
-  | inl (exist k prf) => eq_rect (p k) (fun i => A i -> Comp bool) (f k) n prf
-  end).
-Defined.
-
-Theorem unlift_distinguisher_PPT {p A}
-  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
-  : PPT f -> PPT (unlift_distinguisher pmono f).
-Proof.
-Admitted.
-
-Require Import Eqdep_dec.
-
-Theorem unlift_distinguisher_behaves {p A}
-  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
-  (pinj : forall m n, p m = p n -> m = n)
-  : forall (mu : Dist A) n, dist_sem_eq 
-     (Bind (mu (p n)) (f n))
-     (Bind (mu (p n)) (unlift_distinguisher pmono f (p n))).
-Proof.
-intros. unfold unlift_distinguisher.
-pose proof (pmono_partial_inverse_complete p pmono n).
-destruct H as (k' & prf & isSome).
-rewrite isSome. clear isSome.
-pose proof (pinj _ _ prf). induction H. 
-rewrite <- (eq_rect_eq_dec Peano_dec.eq_nat_dec).
-reflexivity.
-Qed.
-
-Lemma unlift_distinguisher_CSD_fam {p A}
-  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
-  (pinj : forall m n, p m = p n -> m = n)
-  : forall (mu1 mu2 : Dist A), pointwise_relation nat eqRat
-    (CSD_fam (reindex_Dist p mu1) (reindex_Dist p mu2) f)
-    (CSD_fam mu1 mu2 (unlift_distinguisher pmono f) @ p).
-Proof.
-intros. unfold pointwise_relation. intros n.
-unfold CSD_fam, CSD, reindex_Dist, comp.
-rewrite (unlift_distinguisher_behaves pmono f pinj mu1 n true).
-rewrite (unlift_distinguisher_behaves pmono f pinj mu2 n true).
-reflexivity.
-Qed.
+(** The next several proofs show that computational indistinguishability
+    indeed forms an equivalence relation that is respected by PPT
+    functions.
+*)
 
 Lemma negligible_zero : negligible (fun _ => 0).
 Proof.
@@ -426,6 +366,10 @@ apply H0.
 apply PPT_compose; assumption.
 Qed.
 
+
+(** The next set of lemma ("Instances") just say that several constructions
+    respect equivalence relations on their arguments. Declaring these instances
+    is useful for automatic rewriting of goals. *)
 Instance Bind_Proper_dse : forall A B, Proper (@dist_sem_eq A ==> eq ==> @dist_sem_eq B) (@Bind B A).
 Proof.
 unfold Proper, respectful. intros. unfold dist_sem_eq in *.
@@ -441,56 +385,6 @@ intros a0. rewrite !getSupport_In_evalDist. rewrite !(H a0).
 intros. reflexivity.
 Qed.
 
-Theorem eq_dec_refl {A} (de : eq_dec A) (x : A) {B} (t f : B) : 
-  (if de x x then t else f) = t.
-Proof.
-destruct (de x x). reflexivity. congruence.
-Qed.
-
-Inductive permutation {A B} {f : A -> B} :=
-  { f_inv : B -> A
-  ; to_from : forall a, f_inv (f a) = a
-  ; from_to : forall b, f (f_inv b) = b
-  }.
-
-Arguments permutation {A} {B} f : clear implicits.
-
-Definition map_prob {A B : Set} (de : eq_dec B) (f : A -> B) (mu : Comp A) : Comp B
-  := Bind mu (fun x => Ret de (f x)).
-
-Definition perm_uniform {A B : Set} (f : A -> B)
-  (permf : permutation f)
-  (de : eq_dec B)
-  (mu : Comp A)
-  (prob : Rat)
-  (prob_nz : ~ prob == 0)
-  (mu_uniform : forall x, evalDist mu x == prob)
-  : forall x, evalDist (map_prob de f mu) x == prob.
-Proof.
-intros. simpl.
-rewrite (@Fold.sumList_exactly_one _ (f_inv permf x)).
-rewrite from_to, eq_dec_refl, mu_uniform.
-apply ratMult_1_r.
-apply support_NoDup.
-apply getSupport_In_evalDist. rewrite mu_uniform.
-assumption.
-intros. apply ratMult_0. right.
-destruct (de (f b) x). unfold not in H0. apply False_rect.
-apply H0. rewrite <- (to_from permf). rewrite e. reflexivity.
-reflexivity.
-Qed.
-
-Definition perm_uniform_Bvector : forall n
-  (f : Bvector n -> Bvector n),
-  permutation f -> 
-  dist_sem_eq (@Rnd n) (map_prob (@Bvector_eq_dec n) f (@Rnd n)).
-Proof.
-intros.
-unfold dist_sem_eq.
-intros. symmetry. apply perm_uniform. assumption. unfold evalDist.
-unfold eqRat, beqRat. simpl. congruence.
-intros. apply uniformity.
-Qed.
 
 Instance evalDist_Proper : forall A, Proper (@dist_sem_eq A ==> eq ==> eqRat) (@evalDist A).
 Proof.
@@ -525,21 +419,144 @@ unfold Proper, respectful, CI. intros. split; intros.
 - rewrite H, H0. apply H1; assumption.
 Qed.
 
-Lemma nz_le : forall x y, (x <= y)%nat -> StdNat.nz x -> StdNat.nz y.
+
+
+
+
+(** The next several lemmas build up to a theorem that says
+    that computational indistinguishability is preserved by
+    functions p : nat -> nat satisfying
+    forall n, n <= p n.
+    Intuitively, this is because we are going towards more
+    indistinguishable distributions even faster, so it
+    should be relatively obvious! However, the proof relies
+    on "un-reindexing" a distinguisher, that is,
+    taking a 
+    test : Distinguisher (A @ p)
+    and producing a 
+    test' : Distinguisher A
+    which distinguishes just as well. The distinguisher works
+    test' works by finding an inverse for the function p,
+    in order to see where to run the previous distinguisher.
+*)
+
+(** Given an infinite sequence of true-false values, we can check
+    whether there are any "true" values up until a given bound
+    (in time linear in the bound). *)
+Fixpoint bounded_lookup (p : nat -> bool) (bound : nat) :
+ { n | p n = true } + (forall n, (n <= bound)%nat -> p n = false).
+Proof. 
+induction bound.
+- destruct (p 0%nat) eqn:p0. 
+  refine (inl (exist (fun n => p n = true) 0%nat p0)).
+  right. intros. apply Le.le_n_0_eq in H.
+  subst. assumption.
+- destruct IHbound. 
+  refine (inl s).
+  destruct (p (S bound)) eqn:ps.
+  refine (inl (exist (fun n => p n = true) (S bound) ps)).
+  right. intros. destruct (Compare_dec.le_lt_dec (S bound) n).
+  assert (n = S bound) by (apply Le.le_antisym; assumption).
+  subst. assumption. unfold lt in l.
+  apply e. apply Le.le_S_n. assumption.
+Defined.
+
+(** We use this decider to create a partial inverse
+    for a sequence. *)
+Fixpoint pmono_partial_inverse (p : nat -> nat)
+ (n : nat) : { k | p k = n } + (forall k, (k <= n)%nat -> p k <> n).
 Proof.
-intros. constructor. induction H0. unfold gt in *. 
-apply Lt.lt_le_trans with x; assumption.
+pose (bounded_lookup (fun k => EqNat.beq_nat (p k) n) n) as ans.
+destruct ans.
+destruct s.
+rewrite EqNat.beq_nat_true_iff in e.
+refine (inl (exist _ x e)).
+right. intros. apply EqNat.beq_nat_false_iff. apply e.
+assumption.
+Defined.
+
+(** This partial inverse will always successfully find
+    an inverse when there is one. *)
+Definition pmono_partial_inverse_complete (p : nat -> nat)
+  (pmono : forall n, (n <= p n)%nat)
+  : forall k : nat, exists k' prf, pmono_partial_inverse p (p k) = inl (exist _ k' prf).
+Proof.
+intros k.
+destruct (pmono_partial_inverse p (p k)).
+destruct s as (k' & prf). exists k'. exists prf. reflexivity.
+pose proof (n k (pmono k)). congruence.
 Qed.
 
-Lemma leRat_denom : forall n (d1 d2 : nat)
-  (nzd1 : StdNat.nz d1) (nzd2 : StdNat.nz d2),
-  (d1 <= d2)%nat -> n / d2 <= n / d1.
+(** The "always_true" distinguisher is useless, always returning
+    "true" as the name suggests. We call this distinguisher when
+     we fail to find an inverse. *)
+Definition always_true {A} : A -> Comp bool := fun _ => Ret bool_dec true.
+
+(** Un-reindex a distinguisher. *)
+Definition unreindex_distinguisher {p A} 
+  (pmono : forall n, (n <= p n)%nat)
+  (f : Distinguisher (A @ p))
+  : Distinguisher A.
 Proof.
-intros. unfold leRat, bleRat. simpl.
-destruct (Compare_dec.le_gt_dec (n * d1) (n * d2)).
+unfold Distinguisher, comp in *.
+intros n.
+refine (match pmono_partial_inverse p n with
+  | inr _ => always_true
+  | inl (exist k prf) => eq_rect (p k) (fun i => A i -> Comp bool) (f k) n prf
+  end).
+Defined.
+
+(** The unreindexed distinguisher runs in polynomial time.
+    First, the unreindexed distinguisher checks for a partial inverse,
+    where the bound is equal to the security parameter, so this takes
+    linear time. Then, it either runs the trivially true distinguisher,
+    or the distinguisher of "f" at a lower value of the security parameter,
+    and since "f" is polynomial time in its security parameter, this will
+    certainly be polynomial time in this security parameter. *)
+Theorem unreindex_distinguisher_PPT {p A}
+  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
+  : PPT f -> PPT (unreindex_distinguisher pmono f).
+Proof.
+Admitted.
+
+Require Import Eqdep_dec.
+
+(** The unreindexed distinguisher produces the same output as the
+    original distinguisher whenever it manages to find an inverse.
+    The "pinj" constraint supposes that the reindexing function 'p'
+    is injective. This makes the proof that the reindexed distinguisher
+    preserves computational indistinguishability simpler. Otherwise,
+    we would have to say that the unreindexed distinguisher only
+    has the same result infinitely often (rather than always),
+    making the proof trickier. *)
+Theorem unreindex_distinguisher_behaves {p A}
+  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
+  (pinj : forall m n, p m = p n -> m = n)
+  : forall (mu : Dist A) n, dist_sem_eq 
+     (Bind (mu (p n)) (f n))
+     (Bind (mu (p n)) (unreindex_distinguisher pmono f (p n))).
+Proof.
+intros. unfold unreindex_distinguisher.
+pose proof (pmono_partial_inverse_complete p pmono n).
+destruct H as (k' & prf & isSome).
+rewrite isSome. clear isSome.
+pose proof (pinj _ _ prf). induction H. 
+rewrite <- (eq_rect_eq_dec Peano_dec.eq_nat_dec).
 reflexivity.
-pose proof (Mult.mult_le_compat_l d1 d2 n H).
-apply Gt.le_not_gt in H0. contradiction.
+Qed.
+
+Lemma unreindex_distinguisher_CSD_fam {p A}
+  (pmono : forall n, (n <= p n)%nat) (f : Distinguisher (A @ p))
+  (pinj : forall m n, p m = p n -> m = n)
+  : forall (mu1 mu2 : Dist A), pointwise_relation nat eqRat
+    (CSD_fam (reindex_Dist p mu1) (reindex_Dist p mu2) f)
+    (CSD_fam mu1 mu2 (unreindex_distinguisher pmono f) @ p).
+Proof.
+intros. unfold pointwise_relation. intros n.
+unfold CSD_fam, CSD, reindex_Dist, comp.
+rewrite (unreindex_distinguisher_behaves pmono f pinj mu1 n true).
+rewrite (unreindex_distinguisher_behaves pmono f pinj mu2 n true).
+reflexivity.
 Qed.
 
 Lemma negligible_compose_fast : forall f p
@@ -557,15 +574,18 @@ clear H0. apply leRat_denom.
 apply StdNat.expnat_base_le. apply pmono.
 Qed.
 
+(** This is essentially the final theorem, which says that
+    reindexing doesn't affect computational indistinguishability
+    for suitably "nice" reindexers. *)
 Lemma lift_CI' {A} (p : nat -> nat) (mu1 mu2 : Dist A)
   (pmono : forall n, (n <= p n)%nat)
   (pinj : forall m n, p m = p n -> m = n)
   : mu1 ~~ mu2 -> reindex_Dist p mu1 ~~ reindex_Dist p mu2.
 Proof.
 unfold CI. intros. simpl.
-specialize (H (unlift_distinguisher pmono test) 
-  (unlift_distinguisher_PPT pmono test H0)).
-rewrite (unlift_distinguisher_CSD_fam pmono test pinj mu1 mu2).
+specialize (H (unreindex_distinguisher pmono test) 
+  (unreindex_distinguisher_PPT pmono test H0)).
+rewrite (unreindex_distinguisher_CSD_fam pmono test pinj mu1 mu2).
 apply negligible_compose_fast. apply pmono. assumption.
 Qed.
 
@@ -577,6 +597,21 @@ Proof.
 intros. apply lift_CI'; try assumption.
 admit.
 Qed.
+
+
+Theorem eq_dec_refl {A} (de : eq_dec A) (x : A) {B} (t f : B) : 
+  (if de x x then t else f) = t.
+Proof.
+destruct (de x x). reflexivity. congruence.
+Qed.
+
+
+
+
+
+
+
+
 
 
 Definition BDist (length : nat -> nat) := forall n, Comp (Bvector (length n)).
@@ -602,18 +637,6 @@ Proof.
 intros.
 unfold Bmap, Bcompose, eq_Dist.
 intros. symmetry. apply evalDist_assoc_eq.
-Qed.
-
-Definition Bpermutation (f : forall n, Bvector n -> Bvector n) 
-  (permf : forall n, permutation (f n))
-  (l : nat -> nat)
-  : (Bmap (Bdeterministic f) (uniform l) == uniform l)%Fam.
-Proof.
-unfold eq_Dist. intros n.
-unfold Bmap, Bdeterministic, uniform.
-pose proof perm_uniform_Bvector as H.
-unfold map_prob in H. symmetry. apply H.
-apply permf.
 Qed.
 
 Lemma Bmap_ap {l lf} : forall (f : BComp lf) (mu : BDist l),
@@ -749,6 +772,9 @@ Variable len : nat -> nat.
 Variable G : BDetComp len.
 Hypothesis G_is_PRG : PRG G.
 
+(** The statement for problem B asks whether it universally holds that
+    composing G with the "shiftout" function, which simply drops the final
+    bit of a bitvector, still results in a pseudorandom generator. *)
 Definition questionB := forall len' (G' : BDetComp len'),
   PRG G' -> PRG (Bdet_compose G' shiftout_fam).
 
@@ -773,6 +799,10 @@ intros. induction k. simpl in H. rewrite H. reflexivity.
 apply IHk. simpl in H. injection H. auto.
 Qed.
 
+
+(** The solution to Part B, is that no, such a statement is false
+    (given that we have assumed the presence of at least a single
+     pseudorandom generator, no matter what its length function looks like. *)
 Theorem partB : ~ questionB.
 Proof.
 unfold not; intros contra.
@@ -830,6 +860,8 @@ Lemma PPT_det_compose : forall {lf lg} (f : BDetComp lf) (g : BDetComp lg),
 Proof.
 Admitted.
 
+(** The solution to part A: If I compose G with itself, the result is
+    a pseudorandom generator. *)
 Theorem partA : PRG (Bdet_compose G G).
 Proof.
 constructor.
@@ -852,11 +884,80 @@ constructor.
   apply G_len_PPT.
 Qed.
 
+(** For parts c and d, I must first define permutations and give some simple
+    properties about them.
+*)
+
+
+Inductive permutation {A B} {f : A -> B} :=
+  { f_inv : B -> A
+  ; to_from : forall a, f_inv (f a) = a
+  ; from_to : forall b, f (f_inv b) = b
+  }.
+
+Arguments permutation {A} {B} f : clear implicits.
+
+Definition map_prob {A B : Set} (de : eq_dec B) (f : A -> B) (mu : Comp A) : Comp B
+  := Bind mu (fun x => Ret de (f x)).
+
+(** A permutation of the uniform distribution
+    is a uniform distribution. *)
+Definition perm_uniform {A B : Set} (f : A -> B)
+  (permf : permutation f)
+  (de : eq_dec B)
+  (mu : Comp A)
+  (prob : Rat)
+  (prob_nz : ~ prob == 0)
+  (mu_uniform : forall x, evalDist mu x == prob)
+  : forall x, evalDist (map_prob de f mu) x == prob.
+Proof.
+intros. simpl.
+rewrite (@Fold.sumList_exactly_one _ (f_inv permf x)).
+rewrite from_to, eq_dec_refl, mu_uniform.
+apply ratMult_1_r.
+apply support_NoDup.
+apply getSupport_In_evalDist. rewrite mu_uniform.
+assumption.
+intros. apply ratMult_0. right.
+destruct (de (f b) x). unfold not in H0. apply False_rect.
+apply H0. rewrite <- (to_from permf). rewrite e. reflexivity.
+reflexivity.
+Qed.
+
+(** Puts the above result in a clearer format. *)
+Theorem perm_uniform_Bvector : forall n
+  (f : Bvector n -> Bvector n),
+  permutation f -> 
+  (@Rnd n == map_prob (@Bvector_eq_dec n) f (@Rnd n))%Dist.
+Proof.
+intros.
+unfold dist_sem_eq.
+intros. symmetry. apply perm_uniform. assumption. unfold evalDist.
+unfold eqRat, beqRat. simpl. congruence.
+intros. apply uniformity.
+Qed.
+
+(** Another restatement of the result. *)
+Definition Bpermutation (f : forall n, Bvector n -> Bvector n) 
+  (permf : forall n, permutation (f n))
+  (l : nat -> nat)
+  : (Bmap (Bdeterministic f) (uniform l) == uniform l)%Fam.
+Proof.
+unfold eq_Dist. intros n.
+unfold Bmap, Bdeterministic, uniform.
+pose proof perm_uniform_Bvector as H.
+unfold map_prob in H. symmetry. apply H.
+apply permf.
+Qed.
+
+(** We assume that "h" is a permutation, as in the problem set. *)
 Variable h : BDetComp id.
-Hypothesis perm_is_permutation : forall n, permutation (h n).
+Hypothesis h_is_permutation : forall n, permutation (h n).
 
 Hypothesis h_efficient : PPT (Bdeterministic h).
 
+(** The answer to part C: composing G with a permutation
+    does result in a pseudorandom generator. *)
 Theorem partC : PRG (Bdet_compose G h).
 Proof.
 constructor.
@@ -872,7 +973,7 @@ constructor.
   apply CI_cong. apply reindex_PPT. eapply PPT_bounds_len.
   eapply G_is_PRG. apply h_efficient.
   apply G_is_PRG.
-  pose proof (Bpermutation h perm_is_permutation len).
+  pose proof (Bpermutation h h_is_permutation len).
   unfold id in H; simpl in H. rewrite H.
   reflexivity.
 - apply PPT_det_compose. apply G_is_PRG. 
@@ -880,6 +981,8 @@ constructor.
   assumption.
 Qed.
 
+(** The answer to part D: composing a permutation with G
+    does result in a pseudorandom generator. *)
 Theorem partD : PRG (Bdet_compose h G).
 Proof.
 constructor.
@@ -890,7 +993,7 @@ constructor.
   transitivity (Bmap (Bdeterministic G) (@uniform id)).
   apply CI_cong. apply G_is_PRG.
   unfold id; simpl. rewrite Bpermutation. reflexivity.
-  apply perm_is_permutation. apply G_is_PRG.
+  apply h_is_permutation. apply G_is_PRG.
 - apply PPT_det_compose. apply h_efficient.
   apply G_is_PRG.
 Qed.
@@ -898,6 +1001,7 @@ Qed.
 End Part2.
 
 (** Problem 4.1 *)
+(** Unfortunately, I only made partial progress on this. *)
 
 Section Part1.
 
@@ -909,19 +1013,32 @@ Variable p : nat -> nat.
 Hypothesis p_stretches : forall n, n < p n.
 Hypothesis p_poly : polynomial p.
 
-Definition extG := repeat_n_det p G p_stretches.
+Definition p_mono : forall n, (n <= p n)%nat.
+Proof.
+intros. apply Lt.lt_le_weak. apply p_stretches.
+Qed.
 
+Definition extG := repeat_n p G.
+
+
+(** Here, we allow ourselves to use classical logic, so that we can do a proof by contradiction.
+    That is, "Suppose there were a succesful distinguisher on the construction. Then we can
+    find a successful distinguisher on the original pseudorandom generator. *)
 Require Import Classical_Prop.
 
 Axiom classical : forall A (P : A -> Prop), 
   (forall x : A, P x) \/ (exists x : A, ~ P x).
 
+
+(** This sketches the main format of the proof. *)
 Theorem Part1 : PRG extG.
 Proof.
 constructor.
-- apply p_stretches.
+- intros. rewrite Plus.plus_comm. 
+  rewrite Minus.le_plus_minus_r. apply p_stretches. 
+  apply Lt.lt_le_weak. apply p_stretches.
 - unfold id. simpl. unfold CI.
-  pose proof (classical _ (fun test => PPT test -> negligible (CSD_fam (Bmap (Bdeterministic extG) (uniform (fun x => x))) (uniform p) test))). simpl in H.
+  pose proof (classical _ (fun test => PPT test -> negligible (CSD_fam (Bmap (Bdeterministic extG) (uniform (fun x => x))) (uniform _) test))). simpl in H.
   destruct H. apply H.
   destruct H as (dist & breaks_security).
   apply imply_to_and in breaks_security.
@@ -931,10 +1048,68 @@ constructor.
   destruct H as (test' & nonnegltest' & PPTtest').
   apply False_rect. apply nonnegltest'.
   apply G_is_PRG. assumption.
-- unfold extG. apply repeat_n_admissible. assumption.
+- unfold extG. unfold repeat_n_correct_ty. apply repeat_n_admissible; try assumption.
   apply G_is_PRG.
 Qed.
 
+(** This defines a triangular (2-dimensional) family of distributions,
+    of the form
+    G^k (Uniform[n]),
+    which are distributions of length (k + n). *)
+
+Definition G_distribution (n k : nat) : Comp (Bvector (k + n)) :=
+  Bind (Rnd n) (fun x => Ret (@Bvector_eq_dec (k + n)) (repeat_k k G _ x)).
+
+(** Compute the bound using the triangle inequality that
+
+   Distance (G^k(Uniform[n]), Uniform[n + k])
+      <= Sum_{i = 0}^k  Distance(G^i(Uniform[n + k - i]), G^{i + 1}(Uniform[n + k - i - 1]))
+*)
+Fixpoint G_distribution_dist_bound (n k : nat) : (Bvector (k + n) -> Comp bool) -> Rat :=
+  match k as k' return (Bvector (k' + n) -> Comp bool) -> Rat with
+  | 0 => fun _ => 0
+  | S k' => fun test =>
+    let mu := (eq_rect _ (fun m => Comp (Bvector m)) (G_distribution n (S k')) _ (plus_n_Sm _ _)) in
+    let test' := (eq_rect _ (fun m => Bvector m -> Comp bool) test _ (plus_n_Sm _ _)) in
+    CSD (G_distribution (S n) k') mu test'
+         + G_distribution_dist_bound (S n) k' test'
+  end.
+
+Lemma right_ident_dist_sem_eq :
+  forall (A : Set) (eqd : eq_dec A) (c : Comp A),
+  ((Bind c (fun x => Ret eqd x)) == c)%Dist.
+Proof.
+intros. unfold dist_sem_eq. 
+intros. apply evalDist_right_ident_not_broken.
+Qed.
+     
+(** Here I prove that the bound using the repeated triangle inequality holds. *)
+Lemma CSD_G_triangle : forall n k (test : Bvector (k + n) -> Comp bool),
+  CSD (Rnd (k + n)) (G_distribution n k) test <= 
+  G_distribution_dist_bound n k test.
+Proof.
+intros. generalize dependent n. induction k; intros. 
+- unfold G_distribution. simpl. 
+  apply eqRat_impl_leRat.
+  rewrite right_ident_dist_sem_eq.
+  apply CSD_refl.
+- simpl. specialize (IHk (S n) (eq_rect (S (k + n)) (fun m : nat => Bvector m -> Comp bool) test
+        (k + S n)%nat (plus_n_Sm k n))).
+  rewrite <- IHk.
+  (** This statement says that
+     Distance (Random, G_distribution(n, S k)) <=
+        Distance (G_distribution(S n, k), G_distribution(n, S k))
+      + Distance (Random, G_distribution(S n, k))
+    which is clearly just an instance of the triangle inequality!
+    Unfortunately, I can't get the types to match up. Just a technical issue.
+    I will admit defeat.
+  *)
+  admit.
+Admitted.
+
+(** The next set of lemmas works towards finding that the
+    maximum of non-negative numbers in a list, multiplied by
+    the list's length, is at least the sum of those numbers. *)
 Fixpoint maximum (xs : list Rat) : Rat := match xs with
   | nil => 0
   | cons x xs => maxRat x (maximum xs)
@@ -984,21 +1159,6 @@ Qed.
 
 End Part1.
 
-End CSD.     
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1007,79 +1167,7 @@ End CSD.
 
 (** DEAD CODE *)
 
-
-Record Program {A B : nat -> Set} := 
-  { dom_eq_dec : forall n, eq_dec (A n)
-  ; run :> forall n, A n -> Comp (B n)
-  }.
-
-Arguments Program : clear implicits.
-
-Infix "~>" := Program (at level 70).
-
-Record ProgramEquiv {A A' B B'} {f : A ~> B} {g : A' ~> B'} :=
-  { codom_eq : forall n, A n = A' n
-  ;   dom_eq : forall n, B n = B' n
-  ;   run_eq : forall n (x : A n), 
-    let x' : A' n := eq_rect (A n) (fun t => t) x _ (codom_eq n) in
-     dist_sem_eq 
-       (eq_rect _ _ (run f n x) _ (dom_eq n))
-       (run g n x')
-  }.
-
-Arguments ProgramEquiv {A} {A'} {B} {B'} f g : clear implicits. 
-
-Lemma transport {A A' B B'} :
-  (forall n, A n = A' n) -> (forall n, B n = B' n)
-  -> A ~> B -> A' ~> B'.
-Proof.
-intros. constructor.
-intros. rewrite <- H. apply (dom_eq_dec X).
-intros. rewrite <- H in H1. rewrite <- H0.
-apply (run X). assumption.
-Defined.
-
-Lemma transport_equiv {A A' B B'} (Aeq : forall n, A n = A' n)
-  (Beq : forall n, B n = B' n) (f : A ~> B)
-  : ProgramEquiv f (transport Aeq Beq f).
-Proof.
-refine (
-  {| codom_eq := Aeq
-   ; dom_eq := Beq
-  |}).
-intros. simpl. destruct (Beq n). simpl.
-destruct (Aeq n). unfold eq_rec_r. simpl.
-unfold x'. simpl. reflexivity.
-Qed.
-
-Definition composeP {A B C} (f : A ~> B) (g : B ~> C) : A ~> C :=
-  {| run := compose f g
-   ; dom_eq_dec := dom_eq_dec f
-  |}.
-
-Definition prg_id {A} (deceq : forall n, eq_dec (A n)) : A ~> A 
-  := {| run := fun n x => Ret (deceq n) x
-      ; dom_eq_dec := deceq
-     |}.
-
-Definition next_lift {A} {r} (k : nat) (f : A ~> A @ plus r) : 
-  A @ plus k ~> A @ plus (r + k).
-Proof.
-pose (
-{| run := fun n => run f (k + n)
-   ; dom_eq_dec := fun n => dom_eq_dec f (k + n)
-  |}
-) as f'.
-refine (transport _ _ f'); unfold comp; intros.
-reflexivity. rewrite Plus.plus_assoc. reflexivity.
-Defined.
-
-Definition toProg {l} (f : BComp l) : Bvector ~> Bvector @ l.
-Proof.
-refine ({| run := f |}).
-intros. unfold eq_dec. apply Bvector_eq_dec.
-Defined.
-
+(** If we chop off one bit from the uniform distribution, the result is still uniform. *)
 Lemma tl_uniform : forall n, (Bind (Rnd (S n)) (Bmapd Vector.tl) == Rnd n)%Dist.
 Proof.
 intros n. unfold dist_sem_eq. intros v.
@@ -1100,12 +1188,15 @@ simpl. intros. destruct (Bvector_eq_dec b v). congruence.
 apply ratMult_0_r.
 Qed.
 
+(** Chop k bits off of a bitvector. *)
 Fixpoint truncate k : forall n, Bvector (k + n) -> Bvector n :=
   match k as k' return forall n, Bvector (k' + n) -> Bvector n  with
   | 0 => fun n x => x
   | S k' => fun n x => truncate k' n (Vector.tl x)
   end.
 
+(** If we truncate a uniformly sampled bitvector by taking off [k] bits, the
+    result is still uniform. *)
 Lemma truncate_uniform : forall k n, (Bind (Rnd (k + n)) (Bmapd (truncate k n)) == Rnd n)%Dist.
 Proof.
 intros k. induction k.
@@ -1115,3 +1206,7 @@ intros k. induction k.
 - intros n. simpl. rewrite Bmapd_compose2.
   rewrite tl_uniform. fold plus. apply IHk.
 Qed.
+
+
+
+End CSD.     
