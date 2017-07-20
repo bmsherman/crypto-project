@@ -867,19 +867,17 @@ Proof.
 constructor.
 - intros. pose proof (length_stretches G_is_PRG).
   eapply Lt.lt_trans. apply H. apply H.
-- unfold id. rewrite deterministic_compose.
+- unfold id; rewrite deterministic_compose.
   rewrite Bmap_Bcompose.
   transitivity (Bmap (Bdeterministic G) (@uniform len)).
-  rewrite !Bmap_ap. 
+  rewrite !Bmap_ap;
+  apply CI_cong; [apply G_len_PPT |];
   replace (reindex (fun x : nat => x) (Bdeterministic G))
-    with (Bdeterministic G) by reflexivity.
+    with (Bdeterministic G) by reflexivity;
   unfold reindex, Bdeterministic.
-  unfold Bmapd. simpl.
-  apply CI_cong. simpl. 
-  apply G_len_PPT.
   apply (looks_random G_is_PRG).
-  apply looks_random_lift. assumption. unfold id.
-  intros. apply Lt.lt_le_weak. apply (length_stretches G_is_PRG).
+  apply looks_random_lift; [ assumption |
+    intros; apply Lt.lt_le_weak; apply (length_stretches G_is_PRG) ].
 - apply PPT_det_compose.  apply G_is_PRG.
   apply G_len_PPT.
 Qed.
@@ -961,23 +959,21 @@ Hypothesis h_efficient : PPT (Bdeterministic h).
 Theorem partC : PRG (Bdet_compose G h).
 Proof.
 constructor.
-- intros. unfold id. apply (length_stretches G_is_PRG).
-- unfold id; simpl. change (fun x : nat => x) with (@id nat). 
-  change (fun n => len n) with len. 
-  pose proof (Bmap_Bcompose _ _ _ (Bdeterministic G) (Bdeterministic h) (uniform id)). 
-  unfold id in H; simpl in H.
-  pose proof (deterministic_compose (l:=id) G h (uniform id)).
-  unfold id in H0; simpl in H0. rewrite H0.
-  rewrite H. clear H H0.
+- intros. apply (length_stretches G_is_PRG).
+- unfold id; simpl; change (fun x : nat => x) with (@id nat);
+  change (fun n => len n) with len;
+  pose proof (deterministic_compose (l:=id) G h (uniform id)) as H0;
+  unfold id in H0; simpl in H0; rewrite H0; clear H0.
+  pose proof (Bmap_Bcompose _ _ _ (Bdeterministic G) (Bdeterministic h) (uniform id))
+   as H; unfold id in H; simpl in H; rewrite H; clear H.
   transitivity (Bmap (Bdeterministic h) (@uniform len)).
-  apply CI_cong. apply reindex_PPT. eapply PPT_bounds_len.
+  apply CI_cong. apply reindex_PPT. eapply PPT_bounds_len;
   eapply G_is_PRG. apply h_efficient.
   apply G_is_PRG.
-  pose proof (Bpermutation h h_is_permutation len).
-  unfold id in H; simpl in H. rewrite H.
-  reflexivity.
+  rewrite Bpermutation.
+  reflexivity. assumption.
 - apply PPT_det_compose. apply G_is_PRG. 
-  apply reindex_PPT. eapply PPT_bounds_len. apply G_is_PRG. 
+  apply reindex_PPT. eapply PPT_bounds_len; apply G_is_PRG. 
   assumption.
 Qed.
 
